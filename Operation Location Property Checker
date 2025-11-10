@@ -1,0 +1,36 @@
+select 
+    ol.datamart_sk,
+    ol.operational_location_sk,
+    ol.effective_from_time,
+    ol.effective_to_time,
+    ol.record_time,
+    ol.last_update_time,
+    ol.previous_datamart_sk,
+    ol.next_datamart_sk,
+    ol.source_system,
+    ol.ingestion_reference_sk,
+    ol.parent_operational_location_sk,
+    ol.operational_location_id,
+    ol.description as location_description,
+    ol.hierarchy_scope, 
+    ol.hierarchy_scope_path,
+    ol.operational_location_class_id,
+    p.property_sk,
+    p.parent_entity_type,
+    p.parent_entity_sk,
+    p.value_num,
+    p.value_timestamp,
+    p.property_type,
+    p.property_id,
+    p.key,
+    p.value,
+    p.data_type,
+    p.unit_of_measure,
+    p.description as property_description
+from datamart.operational_location ol left join datamart.property p 
+on ol.operational_location_sk = p.parent_entity_sk
+WHERE ol.source_system = 'RMSdh'
+  AND (
+    ol.operational_location_id ~ '[A-Za-z]'
+    AND ol.operational_location_id ~ '\s'        -- must contain a space
+  )
