@@ -1,0 +1,109 @@
+WITH cal AS (
+    SELECT  
+        period_start,
+        period_end,
+        year,
+        month,
+        date
+    FROM datamart.cal_days
+    WHERE year = EXTRACT(YEAR FROM CURRENT_DATE)
+),
+actuals AS (
+    SELECT distinct on (JR.effective_from_time)
+         	(
+        date_trunc(
+            'day',
+            (jr.end_time AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Perth') - INTERVAL '6 hours'
+        ) + INTERVAL '6 hours'
+    )::timestamptz AT TIME ZONE 'Australia/Perth' AT TIME ZONE 'UTC' AS business_day,
+        JR.entity_type AS WE_entity_type,
+        JR.job_response_sk AS WE_job_response_sk,
+        JR.effective_from_time AS WE_effective_from_time,
+        JR.record_time AS WE_record_time,
+        JR.last_update_time AS WE_last_update_time,
+        JR.source_system AS WE_source_system,
+        JR.job_response_id AS WE_job_response_id,
+        JR.start_time AS WE_start_time,
+        JR.end_time AS WE_end_time,
+        JR.job_order_id AS WE_job_order_id,
+        JR.work_master_id AS WE_work_master_id,
+        NULLIF(JR.source_hierarchy_scope_path,'') as WE_source_hierarchy_scope_path,
+        NULLIF(JR.dest_hierarchy_scope_path,'') as WE_dest_hierarchy_scope_path,
+        JR.source_material_lot_id AS WE_source_material_lot_id,
+        JR.source_material_definition_id AS WE_source_material_definition_id,
+        JR.dest_material_lot_id AS WE_dest_material_lot_id,
+        JR.dest_material_definition_id AS WE_dest_material_definition_id,
+        JR.mass AS WE_mass,
+        ea_Bogger.equipment_id AS WE_equipment_id_1,
+        ea_HaulTruck.equipment_id AS WE_equipment_id_2
+       -- pa_HaulOperator.person_id AS WE_person_id_2,
+        --pa_BoggerOperator.person_id AS WE_person_id_1
+    FROM datamart.job_response JR
+    LEFT JOIN datamart.equipment_actual ea_HaulTruck
+        ON ea_HaulTruck.parent_entity_sk = JR.job_response_sk
+       AND ea_HaulTruck.equipment_class_id = 'Haul Truck'
+    LEFT JOIN datamart.equipment_actual ea_Bogger
+        ON ea_Bogger.parent_entity_sk = JR.job_response_sk
+        AND ea_Bogger.equipment_class_id = 'Bogger'
+),
+ML_raw AS (
+    SELECT  DISTINCT ON (ml.bulk_transaction_id)
+        ml.bulk_transaction_id as PT_bulk_transaction_id,
+        ml.effective_from_time AS PT_effective_from_time,
+        ml.bulk_transaction_mass AS PT_bulk_transaction_mass,
+        ml.material_lot_sk AS PT_material_lot_sk_1,
+        ml.material_lot_id AS PT_material_lot_id_1,
+        ml.mass AS PT_qty_material_lot_id_1,
+        ml.material_lot_sk AS PT_material_lot_sk_2,
+        ml.material_lot_id AS PT_material_lot_id_2,
+        ml.mass AS PT_qty_material_lot_id_2,
+        ml.source_system AS PT_source_system,
+        ml.ingestion_reference_sk AS PT_ingestion_reference_sk,
+        ml.hierarchy_scope_path AS PT_hierarchy_scope_path_1,
+        ml.hierarchy_scope_path AS PT_hierarchy_scope_path_2,
+        ml.opening_date AS PT_opening_date_1,
+        ml.opening_date AS PT_opening_date_2,
+        ml.survey_date AS PT_survey_date_1,
+        ml.survey_date AS PT_survey_date_2,
+        ml.survey_quantity AS PT_survey_quantity_1,
+        ml.survey_quantity AS PT_survey_quantity_2,
+        ml.survey_reason AS PT_survey_reason_1,
+        ml.survey_reason AS PT_survey_reason_2
+    FROM datamart.material_lot ml
+),
+ML AS (
+    SELECT
+        r.*,
+        CASE 
+            WHEN a.WE_source_material_lot_id = r.PT_material_lot_id_1 THEN r.PT_qty_material_lot_id_1
+            WHEN a.WE_source_material_lot_id = r.PT_material_lot_id_2 THEN r.PT_qty_material_lot_id_2
+        END AS PT_qty_source_material_lot_id,
+        CASE 
+            WHEN a.WE_dest_material_lot_id = r.PT_material_lot_id_1 THEN r.PT_qty_material_lot_id_1
+            WHEN a.WE_dest_material_lot_id = r.PT_material_lot_id_2 THEN r.PT_qty_material_lot_id_2
+        END AS PT_qty_dest_material_lot_id
+    FROM ML_raw r
+    JOIN actuals a
+      ON a.WE_job_response_id = r.PT_bulk_transaction_id
+),
+actuals_cal AS (
+    SELECT 
+        c.*,
+        a.*
+    FROM cal c
+    LEFT JOIN actuals a
+        ON a.WE_end_time >= c.period_start AND a.WE_end_time < c.period_end
+)
+SELECT
+    ac.*,
+    -- selected renamed PT columns only
+    m.PT_bulk_transaction_id,
+    m.PT_effective_from_time,
+    m.PT_bulk_transaction_mass,
+    m.PT_source_system,
+    m.PT_qty_source_material_lot_id,
+    m.PT_qty_dest_material_lot_id
+FROM actuals_cal ac
+left JOIN ML m
+  ON ac.WE_job_response_id = m.PT_bulk_transaction_id
+ORDER BY ac.period_start DESC
