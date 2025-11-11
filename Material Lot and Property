@@ -1,0 +1,30 @@
+WITH current_records_sk AS (
+         SELECT DISTINCT ON (ml.material_lot_id) ml.material_lot_id,
+            ml.material_lot_sk
+           FROM dw.material_lot ml
+           where ml.source_system ='GCMSdh'
+          ORDER BY ml.material_lot_id, ml.effective_from_time DESC
+        )
+ SELECT 
+ 	x.material_lot_sk,
+    x.material_lot_id,
+    hs.equipment_path AS hierarchy_scope,
+    x.material_definition_id,
+    x.main_quantity_sk,
+    x.main_quantity_key,
+    x.main_quantity_value_dec,
+    x.main_quantity_uom,
+    x.status,
+    x.disposition,
+    x.storage_location,
+    x.storage_location_type,
+    timezone('australia/perth'::text, timezone('utc'::text, x.published_time)) AS published_time,
+    timezone('australia/perth'::text, timezone('utc'::text, x.effective_from_time)) AS effective_from_time,
+    timezone('australia/perth'::text, timezone('utc'::text, x.effective_to_time)) AS effective_to_time,
+    x.is_deleted,
+    timezone('australia/perth'::text, timezone('utc'::text, x.record_time)) AS record_time,
+    x.source_system,
+    x.ingestion_reference_sk
+   FROM current_records_sk sk
+     LEFT JOIN dw.material_lot x ON x.material_lot_sk = sk.material_lot_sk
+     LEFT JOIN dw.hierarchy_scope hs ON x.hierarchy_scope ~~* hs.id
