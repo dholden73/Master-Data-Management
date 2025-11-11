@@ -11,3 +11,16 @@ select
 	me.entity_type
 from aud.message m left join aud.message_entitiy me on me.message_sk = m.message_sk
 where result = 'Success'
+
+select 
+	m.message_sk ,
+	m.received_time ,
+	m."result",
+	m.end_processing_time,
+	m.endpoint_name,
+	m.sender_component_id,
+	m.sender_logical_id,
+	r.message,
+	r.details 
+from aud.message m left join aud."result" r on r.message_sk = m.message_sk
+where m."result" <> 'Success'
