@@ -1,0 +1,31 @@
+ SELECT e.equipment_sk,
+    e.effective_from_time,
+    e.effective_to_time,
+    e.record_time,
+    e.source_system,
+    e.equipment_id,
+    e.equipment_level,
+    e.hierarchy_scope_path,
+    e.equipment_class_id,
+        CASE
+            WHEN lower(e.equipment_class_id) = 'beacon'::text THEN e.equipment_id
+            ELSE p."Beacon ID"
+        END AS beacon_id,
+    p."LocXYZ" AS locxyz,
+    p."EquipInstT" AS equip_inst_t,
+    p."MAC" AS mac,
+    p."EquipInstL" AS equip_inst_l,
+    p."LocInstType" AS loc_inst_type,
+        CASE
+            WHEN lower(e.equipment_class_id) = ANY (ARRAY['bogger'::text, 'haul truck'::text]) THEN e.equipment_id
+            ELSE p."Installed LocationID"
+        END AS installed_location_id,
+    p."Beacon Use" AS beacon_use,
+    p."BeaconType" AS beacon_type,
+    p."beaconUse" AS beacon_use2,
+    p."XYZ" AS xyz,
+    p."beaconType" AS beacon_type2,
+    p."LocInst" AS loc_inst
+   FROM datamart.equipment e
+     LEFT JOIN cur.equipmentpropertytype p ON e.equipment_sk = p.entity_sk
+  WHERE e.effective_from_time <= now() AND e.effective_to_time > now() AND e.equipment_class_id <> 'Prime Mover'::text;
