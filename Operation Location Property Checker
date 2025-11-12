@@ -1,4 +1,87 @@
-select 
+WITH beacon AS (
+  SELECT 
+      btrim(lower(e.operational_location)) AS op_key,
+      e.equipment_id,
+      e.equipment_class_id
+  FROM datamart.equipment e
+  WHERE e.source_system ILIKE 'RMS'
+),
+-- One row per op location with arrays of beacons
+beacon_agg AS (
+SELECT
+	 op_key,
+	 string_agg(DISTINCT equipment_id, ', ' ORDER BY equipment_id)          AS beacon_equipment_ids,
+	 string_agg(DISTINCT equipment_class_id, ', ' ORDER BY equipment_class_id) AS beacon_equipment_classes
+FROM beacon
+GROUP BY op_key
+),
+oploc AS (
+  SELECT
+      ol.datamart_sk,
+      ol.operational_location_sk,
+      ol.effective_from_time,
+      ol.effective_to_time,
+      ol.record_time,
+      ol.last_update_time,
+      ol.previous_datamart_sk,
+      ol.next_datamart_sk,
+      ol.source_system,
+      ol.ingestion_reference_sk,
+      ol.parent_operational_location_sk,
+      ol.operational_location_id,
+      ol.description AS location_description,
+      ol.hierarchy_scope,
+      ol.hierarchy_scope_path,
+      ol.operational_location_class_id,
+      d245.distance_to_245_waste,
+      cap.stockpile_capacity,
+      d260.distance_to_260_rom,
+      btrim(lower(ol.operational_location_id)) AS op_key           -- normalized join key
+  FROM datamart.operational_location AS ol
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS distance_to_245_waste
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'DistanceTo245Waste'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS d245 ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS stockpile_capacity
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'StockpileCapacity'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS cap ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS distance_to_260_rom
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'DistanceTo260ROM'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS d260 ON TRUE
+  WHERE ol.source_system = 'RMSdh'
+    AND ol.operational_location_id ~ '[A-Za-z]'
+    AND ol.operational_location_id ~ '\s'
+)
+SELECT 
     ol.datamart_sk,
     ol.operational_location_sk,
     ol.effective_from_time,
@@ -11,26 +94,14 @@ select
     ol.ingestion_reference_sk,
     ol.parent_operational_location_sk,
     ol.operational_location_id,
-    ol.description as location_description,
-    ol.hierarchy_scope, 
+    ol.location_description,
+    ol.hierarchy_scope,
     ol.hierarchy_scope_path,
-    ol.operational_location_class_id,
-    p.property_sk,
-    p.parent_entity_type,
-    p.parent_entity_sk,
-    p.value_num,
-    p.value_timestamp,
-    p.property_type,
-    p.property_id,
-    p.key,
-    p.value,
-    p.data_type,
-    p.unit_of_measure,
-    p.description as property_description
-from datamart.operational_location ol left join datamart.property p 
-on ol.operational_location_sk = p.parent_entity_sk
-WHERE ol.source_system = 'RMSdh'
-  AND (
-    ol.operational_location_id ~ '[A-Za-z]'
-    AND ol.operational_location_id ~ '\s'        -- must contain a space
-  )
+    ol.distance_to_245_waste,
+    ol.stockpile_capacity,
+    ol.distance_to_260_rom,
+    ba.beacon_equipment_ids,
+	ba.beacon_equipment_classes
+FROM oploc ol
+LEFT JOIN beacon_agg ba
+  ON ba.op_key = ol.op_key;
