@@ -2,18 +2,83 @@ WITH beacon AS (
   SELECT 
       btrim(lower(e.operational_location)) AS op_key,
       e.equipment_id,
-      e.equipment_class_id
+      e.equipment_class_id,
+      e.equipment_sk
   FROM datamart.equipment e
   WHERE e.source_system ILIKE 'RMS'
 ),
--- One row per op location with arrays of beacons
+-- One row per EQUIPMENT with its beacon properties
+beacon_props AS (
+  SELECT
+      b.equipment_sk AS parent_entity_sk,
+      mac.value        AS mac,
+      xyz.value        AS xyz,
+      bt.value         AS beacon_type,
+      bu.value         AS beacon_use
+  FROM beacon b
+  -- MAC
+  LEFT JOIN LATERAL (
+      SELECT p.value
+      FROM datamart.property p
+      WHERE p.parent_entity_sk = b.equipment_sk
+        AND p.property_id = 'MAC'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) mac ON TRUE
+  -- XYZ
+  LEFT JOIN LATERAL (
+      SELECT p.value
+      FROM datamart.property p
+      WHERE p.parent_entity_sk = b.equipment_sk
+        AND p.property_id = 'XYZ'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) xyz ON TRUE
+  -- BeaconType
+  LEFT JOIN LATERAL (
+      SELECT p.value
+      FROM datamart.property p
+      WHERE p.parent_entity_sk = b.equipment_sk
+        AND p.property_id = 'BeaconType'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) bt ON TRUE
+  -- BeaconUse
+  LEFT JOIN LATERAL (
+      SELECT p.value
+      FROM datamart.property p
+      WHERE p.parent_entity_sk = b.equipment_sk
+        AND p.property_id = 'BeaconUse'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) bu ON TRUE
+),
+-- Beacon + its properties
+beacon_with_props AS (
+  SELECT
+      b.op_key,
+      b.equipment_id,
+      b.equipment_class_id,
+      bp.mac,
+      bp.xyz,
+      bp.beacon_type,
+      bp.beacon_use
+  FROM beacon b
+  LEFT JOIN beacon_props bp
+    ON bp.parent_entity_sk = b.equipment_sk   -- <-- Correct FK join
+),
+-- One row per op-location with ALL aggregated beacon info
 beacon_agg AS (
-SELECT
-	 op_key,
-	 string_agg(DISTINCT equipment_id, ', ' ORDER BY equipment_id)          AS beacon_equipment_ids,
-	 string_agg(DISTINCT equipment_class_id, ', ' ORDER BY equipment_class_id) AS beacon_equipment_classes
-FROM beacon
-GROUP BY op_key
+  SELECT
+      op_key,
+      string_agg(DISTINCT equipment_id,       ', ' ORDER BY equipment_id)       AS beacon_equipment_ids,
+      string_agg(DISTINCT equipment_class_id, ', ' ORDER BY equipment_class_id) AS beacon_equipment_classes,
+      string_agg(DISTINCT mac,               ', ' ORDER BY mac)                AS beacon_macs,
+      string_agg(DISTINCT xyz,               ', ' ORDER BY xyz)                AS beacon_xyz,
+      string_agg(DISTINCT beacon_type,       ', ' ORDER BY beacon_type)        AS beacon_types,
+      string_agg(DISTINCT beacon_use,        ', ' ORDER BY beacon_use)         AS beacon_uses
+  FROM beacon_with_props
+  GROUP BY op_key
 ),
 oploc AS (
   SELECT
@@ -36,7 +101,7 @@ oploc AS (
       d245.distance_to_245_waste,
       cap.stockpile_capacity,
       d260.distance_to_260_rom,
-      btrim(lower(ol.operational_location_id)) AS op_key           -- normalized join key
+      btrim(lower(ol.operational_location_id)) AS op_key
   FROM datamart.operational_location AS ol
   LEFT JOIN LATERAL (
       SELECT
@@ -82,26 +147,13 @@ oploc AS (
     AND ol.operational_location_id ~ '\s'
 )
 SELECT 
-    ol.datamart_sk,
-    ol.operational_location_sk,
-    ol.effective_from_time,
-    ol.effective_to_time,
-    ol.record_time,
-    ol.last_update_time,
-    ol.previous_datamart_sk,
-    ol.next_datamart_sk,
-    ol.source_system,
-    ol.ingestion_reference_sk,
-    ol.parent_operational_location_sk,
-    ol.operational_location_id,
-    ol.location_description,
-    ol.hierarchy_scope,
-    ol.hierarchy_scope_path,
-    ol.distance_to_245_waste,
-    ol.stockpile_capacity,
-    ol.distance_to_260_rom,
+    ol.*,
     ba.beacon_equipment_ids,
-	ba.beacon_equipment_classes
+    ba.beacon_equipment_classes,
+    ba.beacon_macs,
+    ba.beacon_xyz,
+    ba.beacon_types,
+    ba.beacon_uses
 FROM oploc ol
 LEFT JOIN beacon_agg ba
-  ON ba.op_key = ol.op_key;
+  ON ba.op_key = ol.op_key
