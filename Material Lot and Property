@@ -1,30 +1,36 @@
 WITH current_records_sk AS (
-         SELECT DISTINCT ON (ml.material_lot_id) ml.material_lot_id,
-            ml.material_lot_sk
-           FROM dw.material_lot ml
-           where ml.source_system ='GCMSdh'
-          ORDER BY ml.material_lot_id, ml.effective_from_time DESC
+         SELECT DISTINCT ON (ma.material_lot_ids[1]) 
+         	ma.material_lot_ids[1],
+            ma.material_actual_sk
+           FROM dw.material_actual ma
+           where ma.source_system ='GCMSdh'
+           and ma.material_use ilike 'inventoried'
+          ORDER BY ma.material_lot_ids[1] DESC
         )
  SELECT 
- 	x.material_lot_sk,
-    x.material_lot_id,
+ 	x.material_actual_sk,
+    x.material_lot_ids[1] as material_lot_id,
     hs.equipment_path AS hierarchy_scope,
-    x.material_definition_id,
+    x.material_definition_ids[1] as material_definition_id,
     x.main_quantity_sk,
     x.main_quantity_key,
     x.main_quantity_value_dec,
+    x.material_use,
     x.main_quantity_uom,
-    x.status,
-    x.disposition,
-    x.storage_location,
-    x.storage_location_type,
-    timezone('australia/perth'::text, timezone('utc'::text, x.published_time)) AS published_time,
-    timezone('australia/perth'::text, timezone('utc'::text, x.effective_from_time)) AS effective_from_time,
-    timezone('australia/perth'::text, timezone('utc'::text, x.effective_to_time)) AS effective_to_time,
+    x.operational_location,
+    x.operational_location_type,
     x.is_deleted,
     timezone('australia/perth'::text, timezone('utc'::text, x.record_time)) AS record_time,
     x.source_system,
-    x.ingestion_reference_sk
+    x.ingestion_reference_sk,
+    au.value as au_gpt,
+    dev.value as DEV,
+    sto.value as STO,
+    open_date.value as openingDate
    FROM current_records_sk sk
-     LEFT JOIN dw.material_lot x ON x.material_lot_sk = sk.material_lot_sk
+     LEFT JOIN dw.material_actual x ON x.material_actual_sk = sk.material_actual_sk
      LEFT JOIN dw.hierarchy_scope hs ON x.hierarchy_scope ~~* hs.id
+     LEFT JOIN dw.property au ON au.entity_sk = x.material_actual_sk AND au.id = 'Au gpt'::text
+     LEFT JOIN dw.property dev ON dev.entity_sk = x.material_actual_sk AND dev.id = 'DEV'::text
+     LEFT JOIN dw.property sto ON sto.entity_sk = x.material_actual_sk AND sto.id = 'STO'::text
+     LEFT JOIN dw.property open_date ON open_date.entity_sk = x.material_actual_sk AND open_date.id = 'Opening Date'::text;
