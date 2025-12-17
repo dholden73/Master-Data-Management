@@ -1,0 +1,163 @@
+WITH base AS (
+  SELECT
+      ml.storage_location,
+      ml.material_lot_id AS name,
+      lower(trim(ml.material_definition_id)) AS md,
+      ml.hierarchy_scope,
+      split_part(
+        ml.hierarchy_scope,
+        '_',
+        array_length(string_to_array(ml.hierarchy_scope, '_'), 1)
+      ) AS hierarchy_scope_last,
+      ml.source_system
+  FROM datamart.material_lot ml
+  WHERE (ml.effective_from_time IS NULL OR ml.effective_from_time <= now())
+    AND (ml.effective_to_time   IS NULL OR ml.effective_to_time   >  now())
+    --and storage_location IS NOT NULL
+    AND ml.source_system iLIKE 'DSS'
+	 -- AND ml.source_system NOT ILIKE 'GCMSdh%'
+	 -- AND ml.source_system NOT ILIKE 'IMS'
+   -- AND ml.source_system NOT ILIKE 'FMS'
+),
+normalized AS (
+  SELECT
+      storage_location,
+      name,
+      hierarchy_scope,
+      hierarchy_scope_last,
+      CASE
+        WHEN md LIKE '%pastefill%' OR md LIKE '%paste  fill%' THEN 'paste fill'
+        ELSE md
+      END AS norm_md
+  FROM base
+),
+filtered AS (
+  SELECT
+      storage_location,
+      name,
+      hierarchy_scope,
+      hierarchy_scope_last,
+      CASE
+        WHEN norm_md = 'insitu ore'    THEN 'Insitu Ore'
+        WHEN norm_md = 'insitu waste'  THEN 'Insitu Waste'
+        WHEN norm_md = 'blasted ore'   THEN 'Blasted Ore'
+        WHEN norm_md = 'blasted waste' THEN 'Blasted Waste'
+        WHEN norm_md = 'rom'           THEN 'ROM'
+        WHEN norm_md = 'waste'         THEN 'Waste'
+        WHEN norm_md = 'paste waste'   THEN 'Paste Waste'
+        WHEN norm_md = 'roadbase fill' THEN 'Roadbase Fill'
+        ELSE NULL
+      END AS category
+  FROM normalized
+  WHERE norm_md IN (
+    'insitu ore','insitu waste','blasted ore','blasted waste',
+    'rom','waste','paste waste','roadbase fill'
+  )
+),
+pivot AS (
+  SELECT
+      storage_location,
+      hierarchy_scope,
+      hierarchy_scope_last,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Insitu Ore')     AS arr_io,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Insitu Waste')   AS arr_iw,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Blasted Ore')    AS arr_bo,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Blasted Waste')  AS arr_bw,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'ROM')            AS arr_rom,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Waste')          AS arr_waste,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Paste Waste')    AS arr_pw,
+      array_agg(DISTINCT name ORDER BY name) FILTER (WHERE category = 'Roadbase Fill')  AS arr_rbf
+  FROM filtered
+  GROUP BY storage_location, hierarchy_scope, hierarchy_scope_last
+),
+final AS (
+  SELECT
+    storage_location,
+    hierarchy_scope,
+    hierarchy_scope_last,
+    COALESCE(array_to_string(arr_io,    E'\n'), '') AS "Insitu Ore",
+    COALESCE(array_to_string(arr_iw,    E'\n'), '') AS "Insitu Waste",
+    COALESCE(array_to_string(arr_bo,    E'\n'), '') AS "Blasted Ore",
+    COALESCE(array_to_string(arr_bw,    E'\n'), '') AS "Blasted Waste",
+    COALESCE(array_to_string(arr_rom,   E'\n'), '') AS "ROM",
+    COALESCE(array_to_string(arr_waste, E'\n'), '') AS "Waste",
+    COALESCE(array_to_string(arr_rbf,   E'\n'), '') AS "Roadbase Fill",
+    COALESCE(array_to_string(arr_pw,    E'\n'), '') AS "Paste Waste",
+    arr_io, arr_iw, arr_bo, arr_bw, arr_rom, arr_waste, arr_rbf, arr_pw,   -- <— add
+    CASE WHEN arr_io    IS NULL OR array_length(arr_io,1)    = 0 THEN NULL ELSE arr_io[array_length(arr_io,1)] END AS last_io,
+    CASE WHEN arr_iw    IS NULL OR array_length(arr_iw,1)    = 0 THEN NULL ELSE arr_iw[array_length(arr_iw,1)] END AS last_iw,
+    CASE WHEN arr_bo    IS NULL OR array_length(arr_bo,1)    = 0 THEN NULL ELSE arr_bo[array_length(arr_bo,1)] END AS last_bo,
+    CASE WHEN arr_bw    IS NULL OR array_length(arr_bw,1)    = 0 THEN NULL ELSE arr_bw[array_length(arr_bw,1)] END AS last_bw,
+    CASE WHEN arr_rom   IS NULL OR array_length(arr_rom,1)   = 0 THEN NULL ELSE arr_rom[array_length(arr_rom,1)] END AS last_rom,
+    CASE WHEN arr_waste IS NULL OR array_length(arr_waste,1) = 0 THEN NULL ELSE arr_waste[array_length(arr_waste,1)] END AS last_waste
+  FROM pivot
+)
+SELECT
+  storage_location,
+  hierarchy_scope,
+  hierarchy_scope_last,
+  "Insitu Ore","Insitu Waste","Blasted Ore","Blasted Waste","ROM","Waste","Roadbase Fill","Paste Waste",
+-- 1) Insitu Ore -> red if:
+--    A) no Insitu Ore but Blasted Ore exists, OR
+--    B) ANY value is not _P#_# and not _###.
+(
+  (
+    (arr_io IS NULL OR array_length(arr_io,1)=0)
+    AND (arr_bo IS NOT NULL AND array_length(arr_bo,1)>0)
+  )
+  OR EXISTS (
+    SELECT 1 FROM unnest(arr_io) v
+    WHERE NOT ( v ~ '_[0-9]{3}$'            -- _### 
+                OR v ~* '_p[0-9]+_[0-9]+$') -- _P#_# (case-insensitive)
+  )
+) AS io_red,
+-- 2) Insitu Waste -> red if:
+--    A) no Insitu Waste but Blasted Waste exists, OR
+--    B) ANY value does not end with _Insitu (case-insensitive).
+(
+  (
+    (arr_iw IS NULL OR array_length(arr_iw,1)=0)
+    AND (arr_bw IS NOT NULL AND array_length(arr_bw,1)>0)
+  )
+  OR EXISTS (
+    SELECT 1 FROM unnest(arr_iw) v
+    WHERE v !~* '_insitu$'
+  )
+) AS iw_red,
+-- 3) Blasted Ore -> red if ANY value:
+--    contains the word "blasted" OR does not end _### or _Blasted.
+(
+  arr_bo IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM unnest(arr_bo) v
+     WHERE  NOT ( v ~ '[0-9]{3}$' OR v ~* '_blasted$' )
+  )
+) AS bo_red,
+-- 4) Blasted Waste -> red if ANY value:
+--    contains the word "blasted" OR does not end _### or _Waste.
+(
+  arr_bw IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM unnest(arr_bw) v
+    WHERE  regexp_replace(lower(v), '[\n_]+', ' ', 'g') ~ '\mblasted\M'
+       OR  NOT ( v ~ '[0-9]{3}$' OR v ~* '_waste$' )
+  )
+) AS bw_red,
+-- 5) ROM -> red if ANY value does not end _ROM.
+(
+  arr_rom IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM unnest(arr_rom) v
+    WHERE v !~* '_rom$'
+  )
+) AS rom_red,
+-- 6) Waste -> red if ANY value does not end _Waste.
+(
+  arr_waste IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM unnest(arr_waste) v
+    WHERE v !~* '_waste$'
+  )
+) AS waste_red
+FROM final
+ORDER BY storage_location NULLS LAST
