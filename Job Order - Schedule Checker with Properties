@@ -1,0 +1,603 @@
+WITH DM_jobOrder AS (
+    SELECT
+        job_order_id,
+        description,
+        start_time,
+        end_time,
+        work_type,
+        work_master_id,
+        work_schedule_id,
+        work_schedule_work_type,
+        work_schedule_start_time,
+        work_schedule_end_time,
+        work_schedule_state,
+        work_request_id,
+        work_request_start_time,
+        work_request_end_time,
+        source_hierarchy_scope_path,
+        source_material_lot_id,
+        source_material_definition_id,
+        dest_hierarchy_scope_path,
+        dest_material_lot_id,
+        dest_material_definition_id,
+        expenditure,
+        dev_type,
+        mass
+    FROM datamart.job_order
+    WHERE work_schedule_id LIKE 'W%'
+),
+actuals AS (
+    SELECT
+        jr.job_order_id,
+        SUM(jr.mass) AS tonnes,
+        AVG(ml.au_gpt) AS au_gpt,  -- NOTE: this is simple average; change to weighted if needed
+        SUM(jr.mass * ml.au_gpt) AS au_mass_grams,
+        MAX(jr.end_time) as end_time
+    FROM datamart.job_response jr
+    LEFT JOIN LATERAL (
+        SELECT
+            ml.au_gpt,
+            ml.au_mass
+        FROM datamart.material_lot ml
+        WHERE ml.material_lot_id = jr.source_material_lot_id
+          AND ml.effective_from_time <= jr.end_time
+          AND (ml.effective_to_time IS NULL OR ml.effective_to_time > jr.end_time)
+        ORDER BY ml.effective_from_time DESC  
+        LIMIT 1
+    ) ml ON TRUE
+    GROUP BY
+        jr.job_order_id
+),
+current_records_sk AS (
+    SELECT DISTINCT ON (ma.material_lot_ids[1]) 
+        ma.material_lot_ids[1] AS material_lot_id,
+        ma.material_actual_sk
+    FROM dw.material_actual ma
+    WHERE ma.source_system = 'GCMSdh'
+      AND ma.material_use ILIKE 'inventoried'
+      -- optional but usually good:
+      AND COALESCE(ma.is_deleted, false) = false
+    ORDER BY 
+        ma.material_lot_ids[1],  -- DISTINCT ON key
+        -- Prefer rows where MD + operational_location are NOT NULL
+        (ma.material_definition_ids[1] IS NULL 
+         OR ma.operational_location IS NULL),
+        ma.record_time DESC,
+        ma.material_actual_sk DESC
+),
+DH_mine_sources AS	(
+	SELECT 
+	    --x.material_actual_sk,
+	    x.material_lot_ids[1] AS material_lot_id,
+	    --hs.equipment_path AS hierarchy_scope,
+	    --x.material_definition_ids[1] AS material_definition_id,
+	    --x.main_quantity_sk,
+	    --x.main_quantity_key,
+	    x.main_quantity_value_dec as mass_inventoried,
+	    --x.material_use,
+	    --x.main_quantity_uom,
+	    --x.operational_location,
+	    --x.operational_location_type,
+	    --x.is_deleted,
+	    x.record_time, ----> need the latest version
+	    --x.source_system,
+	    --x.ingestion_reference_sk,
+	    au.value::numeric AS au_gpt_inventoried,
+	    COALESCE(dev.value, '0') AS DEV_inventoried,
+	    COALESCE(sto.value, '0') AS STO_inventoried,
+	    open_date.value::date AS opening_date_inventoried
+	FROM current_records_sk sk
+	JOIN dw.material_actual x 
+	  ON x.material_actual_sk = sk.material_actual_sk
+	--LEFT JOIN dw.hierarchy_scope hs 
+	--  ON x.hierarchy_scope ~~* hs.id
+	LEFT JOIN dw.property au 
+	  ON au.entity_sk = x.material_actual_sk AND au.id = 'Au gpt'
+	LEFT JOIN dw.property dev 
+	  ON dev.entity_sk = x.material_actual_sk AND dev.id = 'DEV'
+	LEFT JOIN dw.property sto 
+	  ON sto.entity_sk = x.material_actual_sk AND sto.id = 'STO'
+	LEFT JOIN dw.property open_date 
+	  ON open_date.entity_sk = x.material_actual_sk AND open_date.id = 'Opening Date'
+	),
+DSS_blasting_src AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_src_blasting_mass,
+	    au.value as DSS_src_blasting_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_src_blasting_dev,
+	    COALESCE(sto.value, '0') AS DSS_src_blasting_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'consumed'
+	and mr.work_master_id ilike '%blasting'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_blasting_dest AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_dest_blasting_mass,
+	    au.value as DSS_dest_blasting_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_dest_blasting_dev,
+	    COALESCE(sto.value, '0') AS DSS_dest_blasting_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'produced'
+	and mr.work_master_id ilike '%blasting'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_bogging_src AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_src_bogging_mass,
+	    au.value as DSS_src_bogging_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_src_bogging_dev,
+	    COALESCE(sto.value, '0') AS DSS_src_bogging_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'consumed'
+	and mr.work_master_id ilike '%bogging'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_bogging_dest AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_dest_bogging_mass,
+	    au.value as DSS_dest_bogging_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_dest_bogging_dev,
+	    COALESCE(sto.value, '0') AS DSS_dest_bogging_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'produced'
+	and mr.work_master_id ilike '%bogging'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_extraction_src AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_src_extraction_mass,
+	    au.value as DSS_src_extraction_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_src_extraction_dev,
+	    COALESCE(sto.value, '0') AS DSS_src_extraction_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'produced'
+	and mr.work_master_id ilike '%extraction'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+      ),
+ DSS_extraction_dest AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_dest_extraction_mass,
+	    au.value as DSS_dest_extraction_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_dest_extraction_dev,
+	    COALESCE(sto.value, '0') AS DSS_dest_extraction_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'produced'
+	and mr.work_master_id ilike '%extraction'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_cleanup_dest AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_dest_cleanup_mass,
+	    au.value as DSS_dest_cleanup_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_dest_cleanup_dev,
+	    COALESCE(sto.value, '0') AS DSS_dest_cleanup_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'produced'
+	and mr.work_master_id ilike '%cleanup'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time
+),
+DSS_cleanup_src AS (
+	select distinct on ( mr.schedule_id)
+	    mr.material_lot_id,
+	    mr.mass as DSS_src_cleanup_mass,
+	    au.value as DSS_src_cleanup_Au_gpt,
+	    COALESCE(dev.value, '0') AS DSS_src_cleanup_dev,
+	    COALESCE(sto.value, '0') AS DSS_src_cleanup_sto,
+	    mr.schedule_id,
+	    ws.record_time   ----> need the latest schedule version
+	FROM datamart.material_requirement mr
+	LEFT JOIN datamart.job_order jo 
+  	 	ON mr.parent_entity_sk = jo.job_order_sk
+	LEFT JOIN datamart.work_request wr 
+  		ON jo.parent_entity_sk = wr.work_request_sk
+	LEFT JOIN datamart.work_schedule ws 
+  		ON wr.parent_entity_sk = ws.work_schedule_sk
+	LEFT JOIN dw.property au
+	  	ON au.entity_sk = mr.material_requirement_sk AND au.id ilike 'au%' 
+	LEFT JOIN dw.property dev
+		ON dev.entity_sk = mr.material_requirement_sk AND dev.id ilike 'DEV'
+	LEFT JOIN dw.property sto 
+		ON sto.entity_sk = mr.material_requirement_sk AND sto.id ilike 'STO'
+	WHERE mr.source_system ILIKE 'DSS'
+	and mr.material_use ilike 'consumed'
+	and mr.work_master_id ilike '%cleanup'
+	  ORDER BY
+      mr.schedule_id,
+      ws.record_time  
+),     
+joined AS (
+    SELECT
+        ws.work_schedule_id,
+        ws.work_request_id,
+        ws.work_schedule_start_time as schedule_start,
+        ws.work_schedule_end_time as schedule_end,
+        ws.work_request_start_time AS request_start_time,
+        ws.work_request_end_time AS request_end_time,
+        ws.job_order_id,
+        ws.end_time AS job_order_end_time,   -- used to pick the latest cleanup bogging job
+        ws.work_master_id,
+        ws.source_material_lot_id,
+        ws.source_material_definition_id,
+        ws.dest_material_lot_id,
+        ws.dest_material_definition_id,
+        a.tonnes,
+        a.au_gpt,
+        a.au_mass_grams,
+        a.end_time
+    FROM DM_jobOrder ws
+    LEFT JOIN actuals a
+        ON ws.job_order_id = a.job_order_id
+        and a.end_time between ws.work_schedule_start_time and ws.work_schedule_end_time
+),
+blasting AS (
+    SELECT
+        j.work_schedule_id,
+        j.work_request_id,
+        j.request_start_time,
+        j.request_end_time,
+        j.schedule_start,
+        j.schedule_end,
+        j.end_time,
+        j.work_master_id,
+        j.source_material_lot_id,
+        j.source_material_definition_id,
+        j.dest_material_lot_id,
+        j.dest_material_definition_id,
+        j.tonnes,
+        j.au_gpt,
+        j.au_mass_grams
+    FROM joined j
+    WHERE j.work_master_id IN ('Dev Blasting', 'Prod Blasting')
+),
+bogging AS (
+    SELECT
+        j.work_schedule_id,
+        j.work_request_id,
+        j.work_master_id,
+        j.source_material_lot_id,
+        j.source_material_definition_id,
+        j.dest_material_lot_id,
+        j.dest_material_definition_id,
+        j.tonnes,
+        j.au_gpt,
+        j.au_mass_grams
+    FROM joined j
+    WHERE j.work_master_id IN ('Dev Bogging', 'Prod Bogging')
+),
+extraction AS (
+    SELECT
+        j.work_schedule_id,
+        j.work_request_id,
+        j.work_master_id,
+        j.source_material_lot_id,
+        j.source_material_definition_id,
+        j.dest_material_lot_id,
+        j.dest_material_definition_id,
+        j.tonnes,
+        j.au_gpt,
+        j.au_mass_grams
+    FROM joined j
+    WHERE j.work_master_id IN ('Dev Extraction', 'Prod Blasting')
+),
+cleanup AS (
+    SELECT *
+    FROM (
+        SELECT
+            j.work_schedule_id,
+            j.work_request_id,
+            j.work_master_id,
+            j.job_order_end_time,    -- used to pick the latest cleanup bogging job
+            j.source_material_lot_id,
+            j.source_material_definition_id,
+            j.dest_material_lot_id,
+            j.dest_material_definition_id,
+            j.tonnes,
+            j.au_gpt,
+            j.au_mass_grams,
+            ROW_NUMBER() OVER (
+                PARTITION BY j.work_schedule_id, j.work_request_id
+                ORDER BY j.job_order_end_time DESC NULLS LAST, j.job_order_id DESC
+            ) AS rn
+        FROM joined j
+        WHERE j.work_master_id = 'Cleanup Bogging'
+    ) x
+    WHERE rn = 1
+)
+SELECT
+    bl.work_schedule_id,
+    bl.work_request_id,
+  --bl.request_start_time,
+  --bl.request_end_time,
+    bl.schedule_start,
+    bl.schedule_end,
+    bl.end_time,
+    /* -------- BLASTING (anchor) -------- */
+    bl.source_material_lot_id AS blasting_source_material_lot_id,
+    bl.source_material_definition_id AS blasting_source_material_definition_id,
+    bl.dest_material_lot_id AS blasting_dest_material_lot_id,
+    bl.dest_material_definition_id AS blasting_dest_material_definition_id,
+    bl.tonnes AS actual_blasting_tonnes,
+    bl.au_gpt AS actual_blasting_au_gpt,
+    bl.au_mass_grams AS actual_blasting_au_mass_grams,
+	dh.mass_inventoried,
+    dh.record_time,
+    dh.au_gpt_inventoried,
+	dh.DEV_inventoried,
+	dh.STO_inventoried,
+	dh.opening_date_inventoried,
+	dssBl_src.DSS_src_blasting_Au_gpt,
+	dssBl_src.DSS_src_blasting_mass,
+	dssBl_src.DSS_src_blasting_dev,
+	dssBl_src.DSS_src_blasting_sto,
+	dssBl_dest.DSS_dest_blasting_Au_gpt,
+	dssBl_dest.DSS_dest_blasting_mass,
+	dssBl_dest.DSS_dest_blasting_dev,
+	dssBl_dest.DSS_dest_blasting_sto,
+	dssB_src.DSS_src_bogging_Au_gpt,
+	dssB_src.DSS_src_bogging_mass,
+	dssB_src.DSS_src_bogging_dev,
+	dssB_src.DSS_src_bogging_sto,
+	dssB_dest.DSS_dest_bogging_Au_gpt,
+	dssB_dest.DSS_dest_bogging_mass,
+	dssB_dest.DSS_dest_bogging_dev,
+	dssB_dest.DSS_dest_bogging_sto,
+	dsse_src.DSS_src_extraction_Au_gpt,
+	dsse_src.DSS_src_extraction_mass,
+	dsse_src.DSS_src_extraction_dev,
+	dsse_src.DSS_src_extraction_sto,
+	dsse_dest.DSS_dest_extraction_Au_gpt,
+	dsse_dest.DSS_dest_extraction_mass,
+	dsse_dest.DSS_dest_extraction_dev,
+	dsse_dest.DSS_dest_extraction_sto,
+	dsscl_src.DSS_src_cleanup_Au_gpt,
+	dsscl_src.DSS_src_cleanup_mass,
+	dsscl_src.DSS_src_cleanup_dev,
+	dsscl_src.DSS_src_cleanup_sto,
+	dsscl_dest.DSS_dest_cleanup_Au_gpt,
+	dsscl_dest.DSS_dest_cleanup_mass,
+	dsscl_dest.DSS_dest_cleanup_dev,
+	dsscl_dest.DSS_dest_cleanup_sto,
+    /* -------- BOGGING -------- */
+    b.source_material_lot_id AS bogging_source_material_lot_id,
+    b.source_material_definition_id AS bogging_source_material_definition_id,
+    b.dest_material_lot_id AS bogging_dest_material_lot_id,
+    b.dest_material_definition_id AS bogging_dest_material_definition_id,
+    b.tonnes AS bogging_tonnes,
+    b.au_gpt AS bogging_au_gpt,
+    b.au_mass_grams AS bogging_au_mass_grams,
+    /* -------- EXTRACTION -------- */
+    e.source_material_lot_id AS extraction_source_material_lot_id,
+    e.source_material_definition_id AS extraction_source_material_definition_id,
+    e.dest_material_lot_id AS extraction_dest_material_lot_id,
+    e.dest_material_definition_id AS extraction_dest_material_definition_id,
+    e.tonnes AS extraction_tonnes,
+    e.au_gpt AS extraction_au_gpt,
+    e.au_mass_grams AS extraction_au_mass_grams,
+    /* -------- CLEANUP BOGGING -------- */
+    c.source_material_lot_id AS cleanup_source_material_lot_id,
+    c.source_material_definition_id AS cleanup_source_material_definition_id,
+    c.dest_material_lot_id AS cleanup_dest_material_lot_id,
+    c.dest_material_definition_id AS cleanup_dest_material_definition_id,
+    c.tonnes AS cleanup_tonnes,
+    c.au_gpt AS cleanup_au_gpt,
+    c.au_mass_grams AS cleanup_au_mass_grams,
+    -- Insitu non compliant flag _P#_### or _### or _Insitu
+	CASE
+  WHEN bl.work_master_id IN ('Dev Blasting','Prod Blasting')
+   AND bl.source_material_lot_id IS NOT NULL
+   AND NOT (bl.source_material_lot_id ~* '(_[0-9]{3}$|_p[0-9]+_[0-9]+$|_Insitu$)')
+  THEN true
+  ELSE false
+END AS blasting_source_red,
+CASE
+  WHEN bl.work_master_id IN ('Dev Blasting','Prod Blasting')
+   AND bl.dest_material_lot_id IS NOT NULL
+   AND NOT (bl.dest_material_lot_id ~* '([0-9]{3}$|_Blasted$)')
+  THEN true
+  ELSE false
+END AS blasting_dest_red,
+CASE
+  WHEN b.work_master_id IN ('Dev Bogging','Prod Bogging')
+   AND b.source_material_lot_id IS NOT NULL
+   AND NOT (b.source_material_lot_id ~* '(_[0-9]{3}$|_blasted$)')
+  THEN true
+  ELSE false
+END AS bogging_source_red,
+CASE
+  WHEN b.work_master_id IN ('Dev Bogging','Prod Remote Bogging')
+   AND b.dest_material_lot_id IS NOT NULL
+   AND NOT (b.dest_material_lot_id ~* '(_rom$|_waste$)')
+  THEN true
+  ELSE false
+END AS bogging_dest_red,
+CASE
+  WHEN e.work_master_id IN ('Prod Extraction', 'Dev Extraction')
+   AND e.source_material_lot_id IS NOT NULL
+   AND NOT (e.source_material_lot_id ~* '(_rom$|_waste$|_paste waste$)')
+  THEN true
+  ELSE false
+END AS extract_source_red,
+CASE
+  WHEN e.work_master_id IN ('Prod Extraction', 'Dev Extraction')
+   AND e.dest_material_lot_id IS NOT NULL
+   AND NOT (e.dest_material_lot_id ~* '(_rom$|_waste$|_paste waste$)')
+  THEN true
+  ELSE false
+END AS extract_dest_red,
+CASE
+  WHEN c.work_master_id ILIKE 'Cleanup Bogging'
+   AND c.source_material_lot_id IS NOT NULL
+   AND NOT (c.source_material_lot_id ~* '([0-9]{3}$)')
+  THEN true
+  ELSE false
+END AS cleanup_source_red,
+CASE
+  WHEN c.work_master_id = 'Cleanup Bogging'
+   AND c.dest_material_lot_id IS NOT NULL
+   AND NOT (c.dest_material_lot_id ~* '(_waste$|_paste waste$)')
+  THEN true
+  ELSE false
+END AS cleanup_dest_red
+FROM blasting bl
+LEFT JOIN bogging b
+    ON bl.work_schedule_id = b.work_schedule_id
+   AND bl.work_request_id  = b.work_request_id
+LEFT JOIN extraction e
+    ON bl.work_schedule_id = e.work_schedule_id
+   AND bl.work_request_id  = e.work_request_id
+LEFT JOIN cleanup c
+    ON bl.work_schedule_id = c.work_schedule_id
+   AND bl.work_request_id  = c.work_request_id
+left join DH_mine_sources dh
+	on bl.source_material_lot_id = dh.material_lot_id
+left join DSS_blasting_src dssBl_src
+	on bl.source_material_lot_id = dssBl_src.material_lot_id
+	and dssBl_src.schedule_id = bl.work_schedule_id
+left join DSS_blasting_dest dssBl_dest
+	on bl.source_material_lot_id = dssBl_dest.material_lot_id
+	and dssBl_dest.schedule_id = bl.work_schedule_id
+left join DSS_bogging_src dssB_src
+	on bl.source_material_lot_id = dssB_src.material_lot_id
+	and dssB_src.schedule_id = bl.work_schedule_id
+left join DSS_bogging_dest dssB_dest
+	on bl.source_material_lot_id = dssB_dest.material_lot_id
+	and dssB_dest.schedule_id = bl.work_schedule_id
+left join DSS_extraction_src dsse_src
+	on bl.source_material_lot_id = dsse_src.material_lot_id
+	and dsse_src.schedule_id = bl.work_schedule_id
+left join DSS_extraction_dest dsse_dest
+	on bl.source_material_lot_id = dsse_dest.material_lot_id
+	and dsse_dest.schedule_id = bl.work_schedule_id	
+left join DSS_cleanup_src dsscl_src
+	on bl.source_material_lot_id = dsscl_src.material_lot_id
+	and dsse_src.schedule_id = bl.work_schedule_id
+left join DSS_cleanup_dest dsscl_dest
+	on bl.source_material_lot_id = dsscl_dest.material_lot_id
+	and dsscl_dest.schedule_id = bl.work_schedule_id
