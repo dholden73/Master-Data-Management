@@ -1,459 +1,399 @@
 WITH MR_base AS (
     SELECT
-		mr.datamart_sk,
-		mr.entity_type,
-		mr.material_requirement_sk,
-		mr.parent_entity_type,
-		mr.parent_entity_sk,
-		mr.parent_datamart_sk,
-		mr.root_entity_type,
-		mr.root_entity_sk,
-		mr.root_datamart_sk,
-		mr.last_update_time,
-		mr.source_system,
-		mr.ingestion_reference_sk,
-		mr.parent_material_requirement_sk,
-		mr.material_requirement_id,
-		mr.description,
-		mr.hierarchy_scope,
-		mr.hierarchy_scope_path,
-		mr.material_use,
-		mr.material_class_id,
-		mr.material_definition_id,
-		mr.material_lot_id,
-		mr.assembly_type,
-		mr.assembly_relationship,
-		mr.storage_location,
-		mr.storage_location_type,
-		mr.required_by_request_segment_response,
-		mr.test_specification_id,
-		mr.schedule_type,
-		mr.schedule_id,
-		mr.schedule_work_type,
-		mr.schedule_start_time,
-		mr.schedule_end_time,
-		mr.schedule_state,
-		mr.request_id,
-		mr.request_start_time,
-		mr.request_end_time,
-		mr.order_id,
-		mr.order_start_time,
-		mr.order_end_time,
-		mr.work_master_id,
-		mr.mass,
-		ws.record_time
-FROM datamart.material_requirement mr
-LEFT JOIN datamart.job_order jo 
-  ON mr.parent_entity_sk = jo.job_order_sk
-LEFT JOIN datamart.work_request wr 
-  ON jo.parent_entity_sk = wr.work_request_sk
-LEFT JOIN datamart.work_schedule ws 
-  ON wr.parent_entity_sk = ws.work_schedule_sk
-WHERE mr.schedule_id iLIKE 'W%'
+        mr.datamart_sk,
+        mr.entity_type,
+        mr.material_requirement_sk,
+        mr.parent_entity_type,
+        mr.parent_entity_sk,
+        mr.parent_datamart_sk,
+        mr.root_entity_type,
+        mr.root_entity_sk,
+        mr.root_datamart_sk,
+        mr.last_update_time,
+        mr.source_system,
+        mr.ingestion_reference_sk,
+        mr.parent_material_requirement_sk,
+        mr.material_requirement_id,
+        mr.description,
+        mr.hierarchy_scope,
+        mr.hierarchy_scope_path,
+        mr.material_use,
+        mr.material_class_id,
+        mr.material_definition_id,
+        mr.material_lot_id,
+        mr.assembly_type,
+        mr.assembly_relationship,
+        mr.storage_location,
+        mr.storage_location_type,
+        mr.required_by_request_segment_response,
+        mr.test_specification_id,
+        mr.schedule_type,
+        mr.schedule_id,
+        mr.schedule_work_type,
+        mr.schedule_start_time,
+        mr.schedule_end_time,
+        mr.schedule_state,
+        mr.request_id,
+        mr.request_start_time,
+        mr.request_end_time,
+        mr.order_id,
+        mr.order_start_time,
+        mr.order_end_time,
+        mr.work_master_id,
+        mr.mass,
+        ws.record_time
+    FROM datamart.material_requirement mr
+    LEFT JOIN datamart.job_order jo
+      ON mr.parent_entity_sk = jo.job_order_sk
+    LEFT JOIN datamart.work_request wr
+      ON jo.parent_entity_sk = wr.work_request_sk
+    LEFT JOIN datamart.work_schedule ws
+      ON wr.parent_entity_sk = ws.work_schedule_sk
+    WHERE mr.schedule_id ILIKE 'W%'
+    AND mr.schedule_start_time >= current_date - interval '60 days'
 ),
 MR_consumed AS (
-	select *
-	from MR_base
-	where material_use ILIKE 'consumed'
+    SELECT *
+    FROM MR_base
+    WHERE material_use = 'Consumed'
 ),
 MR_produced AS (
-	select *
-	from MR_base
-	where material_use ILIKE 'produced'
+    SELECT *
+    FROM MR_base
+    WHERE material_use = 'Produced'
 ),
 DM_MR AS (
-	SELECT
-	    p.parent_entity_sk,
-	    p.datamart_sk,
-	    p.entity_type,
-	    p.material_requirement_sk AS dest_material_requirement_sk,
-   		c.material_requirement_sk AS source_material_requirement_sk,
-	    p.parent_entity_type,
-	    p.parent_datamart_sk,
-	    p.root_entity_type,
-	    p.root_entity_sk,
-	    p.root_datamart_sk,
-	    p.last_update_time,
-	    p.source_system,
-	    p.ingestion_reference_sk,
-	    p.parent_material_requirement_sk,
-	    p.material_requirement_id,
-	    p.description,
-	    p.request_id,
-	    p.schedule_id,
-	    p.schedule_work_type,
-	    p.schedule_start_time,
-	    p.schedule_end_time,
-	    p.schedule_state,
-	    p.order_id,
-	    p.order_start_time,
-	    p.order_end_time,
-	    p.work_master_id,
-	    p.record_time,
-	-- Source
-	    c.material_lot_id AS source_material_lot_id,
-	    c.material_definition_id AS source_material_definition_id,
-	    c.material_class_id AS source_material_class_id,
-	    c.storage_location AS source_storage_location,
-	    c.storage_location_type AS source_storage_location_type,
-	    c.hierarchy_scope AS source_hierarchy_scope,
-	    c.hierarchy_scope_path AS source_hierarchy_scope_path,
-	    c.mass AS source_mass,    
-	-- Destination
-	    p.material_lot_id AS dest_material_lot_id,
-	    p.material_definition_id AS dest_material_definition_id,
-	    p.material_class_id AS dest_material_class_id,
-	    p.storage_location AS dest_storage_location,
-	    p.storage_location_type AS dest_storage_location_type,
-	    p.hierarchy_scope AS dest_hierarchy_scope,
-	    p.hierarchy_scope_path AS dest_hierarchy_scope_path,
-	    p.mass AS dest_mass
+    SELECT
+        p.parent_entity_sk,
+        p.datamart_sk,
+        p.entity_type,
+        p.material_requirement_sk AS dest_material_requirement_sk,
+        c.material_requirement_sk AS source_material_requirement_sk,
+        p.parent_entity_type,
+        p.parent_datamart_sk,
+        p.root_entity_type,
+        p.root_entity_sk,
+        p.root_datamart_sk,
+        p.last_update_time,
+        p.source_system,
+        p.ingestion_reference_sk,
+        p.parent_material_requirement_sk,
+        p.material_requirement_id,
+        p.description,
+        p.request_id,
+        p.schedule_id,
+        p.schedule_work_type,
+        p.schedule_start_time,
+        p.schedule_end_time,
+        p.schedule_state,
+        p.order_id,
+        p.order_start_time,
+        p.order_end_time,
+        p.work_master_id,
+        p.record_time,
+        -- Source
+        c.material_lot_id AS source_material_lot_id,
+        c.material_definition_id AS source_material_definition_id,
+        c.material_class_id AS source_material_class_id,
+        c.storage_location AS source_storage_location,
+        c.storage_location_type AS source_storage_location_type,
+        c.hierarchy_scope AS source_hierarchy_scope,
+        c.hierarchy_scope_path AS source_hierarchy_scope_path,
+        c.mass AS source_mass,
+        -- Destination
+        p.material_lot_id AS dest_material_lot_id,
+        p.material_definition_id AS dest_material_definition_id,
+        p.material_class_id AS dest_material_class_id,
+        p.storage_location AS dest_storage_location,
+        p.storage_location_type AS dest_storage_location_type,
+        p.hierarchy_scope AS dest_hierarchy_scope,
+        p.hierarchy_scope_path AS dest_hierarchy_scope_path,
+        p.mass AS dest_mass
     FROM MR_produced p
-    FULL OUTER JOIN MR_consumed c
+    INNER JOIN MR_consumed c
       ON c.parent_entity_sk = p.parent_entity_sk
 ),
-MR_props as (
-	select 
-		*
-	from dw.property
-	where property_type ilike 'OpMaterialRequirementPropertyType'
-),
-DM_MR_Properties AS (
-	SELECT 
-	   	ws.parent_entity_sk,
-	    ws.datamart_sk,
-	    ws.entity_type,
-	    ws.dest_material_requirement_sk,
-   		ws.source_material_requirement_sk,
-	    ws.parent_entity_type,
-	    ws.parent_datamart_sk,
-	    ws.root_entity_type,
-	    ws.root_entity_sk,
-	    ws.root_datamart_sk,
-	    ws.last_update_time,
-	    ws.source_system,
-	    ws.ingestion_reference_sk,
-	    ws.parent_material_requirement_sk,
-	    ws.material_requirement_id,
-	    ws.description,
-	    ws.request_id,
-	    ws.schedule_id,
-	    ws.schedule_work_type,
-	    ws.schedule_start_time,
-	    ws.schedule_end_time,
-	    ws.schedule_state,
-	    ws.order_id,
-	    ws.order_start_time,
-	    ws.order_end_time,
-	    ws.work_master_id,
-	    ws.record_time,
-	    ws.source_material_lot_id,
-	    ws.source_material_definition_id,
-	    ws.source_material_class_id,
-	    ws.source_storage_location,
-	    ws.source_storage_location_type,
-	    ws.source_hierarchy_scope,
-	    ws.source_hierarchy_scope_path,
-	    ws.source_mass,
-	    ws.dest_material_lot_id,
-	    ws.dest_material_definition_id,
-	    ws.dest_material_class_id,
-	    ws.dest_storage_location,
-	    ws.dest_storage_location_type,
-	    ws.dest_hierarchy_scope,
-	    ws.dest_hierarchy_scope_path,
-	    ws.dest_mass,
-	   	au_c.value as source_au_gpt,
-	    CASE
-      		WHEN NULLIF(trim(dev_c.value), '') IS NOT NULL AND trim(dev_c.value) ~ '^-?\d+(\.\d+)?$' THEN 'DEV'
-      		WHEN NULLIF(trim(sto_c.value), '') IS NOT NULL AND trim(sto_c.value) ~ '^-?\d+(\.\d+)?$' THEN 'STO'
-     		ELSE NULL
-    	END AS contributor,
-       CASE
-       		WHEN NULLIF(trim(dev_c.value), '') IS NOT NULL AND trim(dev_c.value) ~ '^-?\d+(\.\d+)?$' THEN dev_c.value::numeric
-      		WHEN NULLIF(trim(sto_c.value), '') IS NOT NULL AND trim(sto_c.value) ~ '^-?\d+(\.\d+)?$' THEN sto_c.value::numeric
-      		ELSE NULL
-       END AS contributor_value
-        --dev_c.value AS source_dev,
-	    --sto_c.value AS source_sto
-	    --au_d.value as dest_au_gpt,
-	    --dev_d.value AS dest_dev,
-	    --sto_d.value AS dest_sto
-	FROM DM_MR ws
-	LEFT JOIN MR_props au_c
-	  	ON au_c.entity_sk = ws.source_material_requirement_sk AND au_c.id ilike '%gpt%' 
-	LEFT JOIN MR_props dev_c
-		ON dev_c.entity_sk = source_material_requirement_sk AND dev_c.id ilike 'DEV'
-	LEFT JOIN MR_props sto_c 
-		ON sto_c.entity_sk = source_material_requirement_sk AND sto_c.id ilike 'STO'
-	--LEFT JOIN MR_props au_d
-	  --	ON au_d.entity_sk = ws.dest_material_requirement_sk AND au_d.id ilike 'au gpt%' 
-	--	LEFT JOIN MR_props dev_d
-	--		ON dev_d.entity_sk = dest_material_requirement_sk AND dev_d.id ilike 'DEV'
-	--	LEFT JOIN MR_props sto_d 
-	--		ON sto_d.entity_sk = dest_material_requirement_sk AND sto_d.id ilike 'STO'
-	ORDER BY
-      ws.schedule_id,
-      ws.record_time
-),
-actuals AS (
+MR_props AS (
     SELECT
-        jr.job_order_id,
-        SUM(jr.mass) AS tonnes,
-        AVG(ml.au_gpt) AS au_gpt,  -- NOTE: this is simple average; change to weighted if needed
-        SUM(jr.mass * ml.au_gpt) AS au_mass_grams,
-        MAX(jr.end_time) as end_time
-    FROM datamart.job_response jr
-    LEFT JOIN LATERAL (
-        SELECT
-            ml.au_gpt,
-            ml.au_mass
-        FROM datamart.material_lot ml
-        WHERE ml.material_lot_id = jr.source_material_lot_id
-          AND ml.effective_from_time <= jr.end_time
-          AND (ml.effective_to_time IS NULL OR ml.effective_to_time > jr.end_time)
-        ORDER BY ml.effective_from_time DESC  
-        LIMIT 1
-    ) ml ON TRUE
-    GROUP BY
-        jr.job_order_id
+        entity_sk,
+        id,
+        value
+    FROM dw.property
+    WHERE property_type = 'OpMaterialRequirementPropertyType'
+),
+DM_MR_Properties AS MATERIALIZED (
+    SELECT
+        ws.parent_entity_sk,
+        ws.datamart_sk,
+        ws.entity_type,
+        ws.dest_material_requirement_sk,
+        ws.source_material_requirement_sk,
+        ws.parent_entity_type,
+        ws.parent_datamart_sk,
+        ws.root_entity_type,
+        ws.root_entity_sk,
+        ws.root_datamart_sk,
+        ws.last_update_time,
+        ws.source_system,
+        ws.ingestion_reference_sk,
+        ws.parent_material_requirement_sk,
+        ws.material_requirement_id,
+        ws.description,
+        ws.request_id,
+        ws.schedule_id,
+        ws.schedule_work_type,
+        ws.schedule_start_time,
+        ws.schedule_end_time,
+        ws.schedule_state,
+        ws.order_id,
+        ws.order_start_time,
+        ws.order_end_time,
+        ws.work_master_id,
+        ws.record_time,
+        ws.source_material_lot_id,
+        ws.source_material_definition_id,
+        ws.source_material_class_id,
+        ws.source_storage_location,
+        ws.source_storage_location_type,
+        ws.source_hierarchy_scope,
+        ws.source_hierarchy_scope_path,
+        ws.source_mass,
+        ws.dest_material_lot_id,
+        ws.dest_material_definition_id,
+        ws.dest_material_class_id,
+        ws.dest_storage_location,
+        ws.dest_storage_location_type,
+        ws.dest_hierarchy_scope,
+        ws.dest_hierarchy_scope_path,
+        ws.dest_mass,
+        au_c.value::numeric AS source_au_gpt,
+        CASE
+            WHEN NULLIF(trim(dev_c.value), '') IS NOT NULL AND trim(dev_c.value) ~ '^-?\d+(\.\d+)?$' THEN 'DEV'
+            WHEN NULLIF(trim(sto_c.value), '') IS NOT NULL AND trim(sto_c.value) ~ '^-?\d+(\.\d+)?$' THEN 'STO'
+            ELSE NULL
+        END AS contributor,
+        CASE
+            WHEN NULLIF(trim(dev_c.value), '') IS NOT NULL AND trim(dev_c.value) ~ '^-?\d+(\.\d+)?$' THEN dev_c.value::numeric
+            WHEN NULLIF(trim(sto_c.value), '') IS NOT NULL AND trim(sto_c.value) ~ '^-?\d+(\.\d+)?$' THEN sto_c.value::numeric
+            ELSE NULL
+        END AS contributor_value
+    FROM DM_MR ws
+    LEFT JOIN MR_props au_c
+      ON au_c.entity_sk = ws.source_material_requirement_sk AND au_c.id ILIKE '%gpt%'
+    LEFT JOIN MR_props dev_c
+      ON dev_c.entity_sk = ws.source_material_requirement_sk AND dev_c.id ILIKE 'DEV'
+    LEFT JOIN MR_props sto_c
+      ON sto_c.entity_sk = ws.source_material_requirement_sk AND sto_c.id ILIKE 'STO'
+   -- ORDER BY
+    --  ws.schedule_id,
+    --  ws.record_time
 ),
 -- List of inventoried MLs
 current_records_sk AS (
-    SELECT DISTINCT ON (ma.material_lot_ids[1]) 
+    SELECT DISTINCT ON (ma.material_lot_ids[1])
         ma.material_lot_ids[1] AS material_lot_id,
         ma.material_actual_sk
     FROM dw.material_actual ma
     WHERE ma.source_system = 'GCMSdh'
-      AND ma.material_use ILIKE 'inventoried'
+      AND ma.material_use = 'Inventoried'
       AND COALESCE(ma.is_deleted, false) = false
-    ORDER BY 
-        ma.material_lot_ids[1],  -- DISTINCT ON key
-        (ma.material_definition_ids[1] IS NULL 
-         OR ma.operational_location IS NULL),
+    ORDER BY
+        ma.material_lot_ids[1],
+        (ma.material_definition_ids[1] IS NULL OR ma.operational_location IS NULL),
         ma.record_time DESC,
         ma.material_actual_sk DESC
 ),
-DH_mine_sources AS	(
-	SELECT 
-	    --x.material_actual_sk,
-	    x.material_lot_ids[1] AS inventoried_material_lot_id,
-	    --hs.equipment_path AS hierarchy_scope,
-	    --x.material_definition_ids[1] AS material_definition_id,
-	    --x.main_quantity_sk,
-	    --x.main_quantity_key,
-	    x.main_quantity_value_dec as inventoried_mass,
-	    --x.material_use,
-	    --x.main_quantity_uom,
-	    x.operational_location as inventoried_operational_location,
-	    --x.operational_location_type,
-	    --x.is_deleted,
-	    x.record_time as inventoried_record_time, ----> need the latest version
-	    --x.source_system,
-	    --x.ingestion_reference_sk,
-	    au.value::numeric AS inventoried_au_gpt,
-	    COALESCE(dev.value, '0') AS inventoried_DEV,
-	    COALESCE(sto.value, '0') AS inventoried_STO,
-	    open_date.value::date AS inventoried_opening_date
-	FROM current_records_sk sk
-	JOIN dw.material_actual x 
-	  ON x.material_actual_sk = sk.material_actual_sk
-	--LEFT JOIN dw.hierarchy_scope hs 
-	--  ON x.hierarchy_scope ~~* hs.id
-	LEFT JOIN dw.property au 
-	  ON au.entity_sk = x.material_actual_sk AND au.id = 'Au gpt'
-	LEFT JOIN dw.property dev 
-	  ON dev.entity_sk = x.material_actual_sk AND dev.id = 'DEV'
-	LEFT JOIN dw.property sto 
-	  ON sto.entity_sk = x.material_actual_sk AND sto.id = 'STO'
-	LEFT JOIN dw.property open_date 
-	  ON open_date.entity_sk = x.material_actual_sk AND open_date.id = 'Opening Date'
-),     
+MA_props AS (
+    SELECT
+        entity_sk,
+        id,
+        value
+    FROM dw.property
+    WHERE property_type = 'OpMaterialActualPropertyType'
+),
+DH_mine_sources AS (
+    SELECT
+        x.material_lot_ids[1] AS inventoried_material_lot_id,
+        x.main_quantity_value_dec AS inventoried_mass,
+        x.operational_location AS inventoried_operational_location,
+        x.record_time AS inventoried_record_time,
+        au.value::numeric AS inventoried_au_gpt,
+        COALESCE(dev.value, '0') AS inventoried_DEV,
+        COALESCE(sto.value, '0') AS inventoried_STO
+    FROM current_records_sk sk
+    JOIN dw.material_actual x
+      ON x.material_actual_sk = sk.material_actual_sk
+    LEFT JOIN MA_props au
+      ON au.entity_sk = x.material_actual_sk AND au.id = 'Au gpt'
+    LEFT JOIN MA_props dev
+      ON dev.entity_sk = x.material_actual_sk AND dev.id = 'DEV'
+    LEFT JOIN MA_props sto
+      ON sto.entity_sk = x.material_actual_sk AND sto.id = 'STO'
+),
 joined AS (
     SELECT
-	   	ws.parent_entity_sk,
-	    --ws.datamart_sk,
-	    --ws.entity_type,
-	    ws.dest_material_requirement_sk,
-   		ws.source_material_requirement_sk,
-	    --ws.parent_entity_type,
-	    --ws.parent_datamart_sk,
-	    --ws.root_entity_type,
-	    --ws.root_entity_sk,
-	    --ws.root_datamart_sk,
-	    ws.last_update_time,
-	    ws.source_system,
-	    ws.ingestion_reference_sk,
-	    ws.parent_material_requirement_sk,
-	    ws.material_requirement_id,
-	    ws.description,
-	    ws.schedule_id as schedule_id_2,
-	    ws.schedule_work_type,
-	    ws.schedule_start_time,
-	    ws.schedule_end_time,
-	    ws.schedule_state,
-	    ws.request_id,
-	    ws.order_id,
-	    ws.order_start_time,
-	    ws.order_end_time,
-	    ws.work_master_id,
-	    ws.record_time,
-	    ws.source_material_lot_id,
-	    ws.source_material_definition_id,
-	    ws.source_material_class_id,
-	    ws.source_storage_location,
-	    ws.source_storage_location_type,
-	    ws.source_hierarchy_scope,
-	    ws.source_hierarchy_scope_path,
-	    ws.source_mass,
-	    ws.dest_material_lot_id,
-	    ws.dest_material_definition_id,
-	    ws.dest_material_class_id,
-	    ws.dest_storage_location,
-	    ws.dest_storage_location_type,
-	    ws.dest_hierarchy_scope,
-	    ws.dest_hierarchy_scope_path,
-	    ws.dest_mass,
-	   	ws.source_au_gpt,
-	    ws.contributor,
-	    ws.contributor_value,
-        a.tonnes AS actual_tonnes,
-        a.au_gpt as actual_au_gpt,
-        a.au_mass_grams AS actual_au_mass_grams,
-        a.end_time as actual_end_time
+        ws.parent_entity_sk,
+        ws.dest_material_requirement_sk,
+        ws.source_material_requirement_sk,
+        ws.last_update_time,
+        ws.source_system,
+        ws.ingestion_reference_sk,
+        ws.parent_material_requirement_sk,
+        ws.material_requirement_id,
+        ws.description,
+        ws.schedule_id AS schedule_id,
+        ws.schedule_work_type,
+        ws.schedule_start_time,
+        ws.schedule_end_time,
+        ws.schedule_state,
+        ws.request_id,
+        ws.order_id,
+        -- job order step number (e.g. "...2903.10" -> 10)
+        NULLIF(regexp_replace(ws.order_id, '.*\.(\d+)$', '\1'), ws.order_id)::int AS order_step_no,
+        ws.order_start_time,
+        ws.order_end_time,
+        ws.work_master_id,
+        ws.record_time,
+        ws.source_material_lot_id,
+        ws.source_material_definition_id,
+        ws.source_material_class_id,
+        ws.source_storage_location,
+        ws.source_storage_location_type,
+        ws.source_hierarchy_scope,
+        ws.source_hierarchy_scope_path,
+        ws.source_mass,
+        ws.dest_material_lot_id,
+        ws.dest_material_definition_id,
+        ws.dest_material_class_id,
+        ws.dest_storage_location,
+        ws.dest_storage_location_type,
+        ws.dest_hierarchy_scope,
+        ws.dest_hierarchy_scope_path,
+        ws.dest_mass,
+        ws.source_au_gpt,
+        ws.contributor,
+        ws.contributor_value
     FROM DM_MR_Properties ws
-    LEFT JOIN actuals a
-        ON ws.order_id = a.job_order_id
-        and a.end_time between ws.schedule_start_time and ws.schedule_end_time
 )
 SELECT
   j.*,
-  dh.*, 
-  ---Consumed Material Lot IDs conditional formatting
-  --- Blasting work masters - Insitu non compliant flag _P#_### or _### or _Insitu or null/empty
-  --- Bogging work masters - 
-  --- Extraction work masters - 
+  dh.*,
+   -- Only show these values for blasting rows; otherwise NULL (blank cell in QS)
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Prod Blasting') THEN j.source_au_gpt
+    ELSE NULL
+  END AS source_au_gpt_display,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Prod Blasting') THEN j.contributor
+    ELSE NULL
+  END AS contributor_display,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Prod Blasting') THEN j.contributor_value
+    ELSE NULL
+  END AS contributor_value_display,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting') AND (j.source_material_lot_id IS NULL OR NOT (j.source_material_lot_id ~* '(_[0-9]{3}$|_insitu$)')) THEN 1
+    WHEN j.work_master_id IN ('Dev Blasting') AND (dh.inventoried_material_lot_id IS NULL) THEN 2
+    WHEN j.work_master_id IN ('Dev Bogging','Cleanup Bogging') AND (j.source_material_lot_id IS NULL OR NOT (j.source_material_lot_id ~* '([0-9]{3}$)')) THEN 3
+    WHEN j.work_master_id IN ('Prod Extraction','Dev Extraction') AND (j.source_material_lot_id IS NULL OR NOT (j.source_material_lot_id ~* '(_SP[0-9]{0,2}_(rom|waste|paste_waste)$)')) THEN 4
+    WHEN j.work_master_id IN ('Prod Blasting') AND (j.source_material_lot_id IS NULL OR NOT (j.source_material_lot_id ~* '(_p[0-9]+_[0-9]+$)')) THEN 5
+    WHEN j.work_master_id IN ('Prod Blasting') AND (dh.inventoried_material_lot_id IS NULL) THEN 6
+    WHEN j.work_master_id IN ('Prod Remote Bogging') AND (j.source_material_lot_id IS NULL OR NOT (j.source_material_lot_id ~* '(_blasted$)')) THEN 7
+    ELSE NULL
+  END AS source_material_lot_red,
+  CASE
+    WHEN j.source_storage_location IS NULL THEN 1
+    ELSE NULL
+  END AS source_location_red,
+    CASE
+    WHEN j.dest_storage_location IS NULL THEN 1
+    ELSE NULL
+  END AS dest_location_red,
+ CASE
+	WHEN j.work_master_id IN ('Dev Blasting') AND (j.dest_material_lot_id IS NULL OR NOT (j.dest_material_lot_id ~* '([0-9]{3}$)')) THEN 1
+	WHEN j.work_master_id IN ('Dev Bogging','Cleanup Bogging') AND (j.dest_material_lot_id IS NULL OR NOT (j.dest_material_lot_id ~* '(_SP[0-9]{0,2}_(rom|waste|paste_waste)$)')) THEN 2
+	WHEN j.work_master_id IN ('Prod Extraction','Dev Extraction') AND (j.dest_material_lot_id IS NULL OR NOT (j.dest_material_lot_id ~* '(260_ROM$|245_Waste_Dump$|245_Paste_Dump$)')) THEN 3
+	WHEN j.work_master_id IN ('Prod Blasting') AND (j.dest_material_lot_id IS NULL OR NOT (j.dest_material_lot_id ~* '(_blasted$)')) THEN 4
+	WHEN j.work_master_id IN ('Prod Remote Bogging') AND (j.dest_material_lot_id IS NULL OR NOT (j.dest_material_lot_id ~* '(_SP[0-9]{0,2}_(rom|waste|paste_waste)$)')) THEN 5
+	ELSE NULL
+ END AS dest_material_lot_red,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') AND j.source_material_definition_id IN ('Insitu Waste','Blasted Waste','Waste') AND (j.source_mass != 350) THEN 1
+    WHEN j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') AND j.source_material_definition_id IN ('Insitu Ore','Blasted Ore','ROM') AND (j.source_mass != 260) THEN 2
+    WHEN j.work_master_id IN ('Prod Blasting','Prod Extraction', 'Prod Remote Bogging') AND j.source_material_definition_id IN ('Insitu Ore','Blasted Ore','Waste','Blasted Waste')
+      AND (j.source_mass < 1) THEN 3
+    WHEN j.work_master_id IN ('Cleanup Bogging') AND j.source_material_definition_id IN ('Blasted Ore','Blasted Waste') AND (j.source_mass < 1) THEN 4
+    ELSE NULL
+  END AS source_mass_red,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') AND j.dest_material_definition_id IN ('Blasted Waste','Waste') AND (j.dest_mass != 350) THEN 1
+    WHEN j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') AND j.dest_material_definition_id IN ('Blasted Ore','ROM') AND (j.dest_mass != 260) THEN 2
+    WHEN j.work_master_id IN ('Prod Blasting','Prod Extraction', 'Prod Remote Bogging') AND j.dest_material_definition_id IN ('Blasted Ore','ROM','Waste','Blasted Waste')
+       AND (j.dest_mass < 1) THEN 3
+    WHEN j.work_master_id IN ('Cleanup Bogging') AND j.dest_material_definition_id IN ('Waste','ROM') AND (j.dest_mass < 1) THEN 4
+    ELSE NULL
+  END AS dest_mass_red,
+  CASE
+    WHEN j.work_master_id IN ('Dev Blasting','Prod Blasting')
+      AND j.source_au_gpt IS NULL THEN 1
+    ELSE NULL
+  END AS source_au_gpt_red,
 CASE
   WHEN
-      j.work_master_id IN ('Dev Blasting','Prod Blasting')
-      AND (
-        j.source_material_lot_id IS NULL
-        OR NOT (j.source_material_lot_id ~* '(_[0-9]{3}$|_p[0-9]+_[0-9]+$|_insitu$)')
-      )
+    (
+      j.work_master_id = 'Dev Blasting' AND (j.contributor IS NULL OR j.contributor NOT ILIKE 'dev')
+    )
+    OR
+    (
+      j.work_master_id = 'Prod Blasting' AND (j.contributor IS NULL OR j.contributor NOT ILIKE 'sto')
+    )
   THEN 1
-  WHEN    j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
-      AND (
-        j.source_material_lot_id IS NULL
-        OR NOT (j.source_material_lot_id ~* '([0-9]{3}$|_blasted$)')
-      )
-  THEN 2
-  WHEN    j.work_master_id IN ('Prod Extraction', 'Dev Extraction')
-      AND (
-        j.source_material_lot_id IS NULL
-        OR NOT (j.source_material_lot_id ~* '(_SP[0-9]{0,2}_(rom|waste|paste_waste)$)')
-      )
-  THEN 3
-  ELSE 0
-END AS source_material_lot_red,
- --- Produced Material Lot IDs conditional formatting
+  ELSE NULL
+END AS source_contributor_red,
 CASE
-  WHEN
-      j.work_master_id IN ('Dev Blasting','Prod Blasting')
-      AND (
-        j.dest_material_lot_id IS NULL
-        OR NOT (j.dest_material_lot_id ~* '([0-9]{3}$|_Blasted$)')
-      )
-   THEN 1
-   WHEN
-      j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
-      AND (
-        j.dest_material_lot_id IS NULL
-        OR NOT (j.dest_material_lot_id ~* '(_SP[0-9]{0,2}_(rom|waste|paste_waste)$)')
-      )
-   THEN 2
-   WHEN
-      j.work_master_id IN ('Prod Extraction', 'Dev Extraction', 'Paste Rehandling')
-      AND (
-        j.dest_material_lot_id IS NULL
-        OR NOT (j.dest_material_lot_id ~* '(_rom$|_waste_dump$|_paste_dump$)')
-      ) 
-  THEN 3
-  ELSE 0
-END AS dest_material_lot_red,
---- CF for source and destination qty, For Declines/Access Ways is the qty 350t? For Ore Drives is the Qty 260t?, prod and cleanup > 1
-CASE
-  WHEN
-      j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') and j.source_material_definition_id IN ('Insitu Waste','Blasted Waste','Waste')
-      AND (
-        j.source_mass != 350
-      )
+  WHEN j.work_master_id IN ('Dev Blasting', 'Prod Blasting') AND j.contributor_value is NULL THEN 1
+  ELSE NULL
+END AS source_contributor_value,
+  -- Error flag: bogging dest ML != extraction source ML (within same work_request_id)
+  CASE
+    WHEN j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
+      AND MAX(j.dest_material_lot_id) FILTER (
+        WHERE j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
+      ) OVER (PARTITION BY j.request_id) IS NOT NULL
+      AND
+      MAX(j.source_material_lot_id) FILTER (
+        WHERE j.work_master_id IN ('Dev Extraction','Prod Extraction')
+      ) OVER (PARTITION BY j.request_id) IS NOT NULL
+      AND
+      MAX(j.dest_material_lot_id) FILTER (
+        WHERE j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
+      ) OVER (PARTITION BY j.request_id)
+      <>
+      MAX(j.source_material_lot_id) FILTER (
+        WHERE j.work_master_id IN ('Dev Extraction','Prod Extraction')
+      ) OVER (PARTITION BY j.request_id)
     THEN 1
-    WHEN
-      j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') and j.source_material_definition_id IN ('Insitu Ore','Blasted Ore','ROM')
-      AND (
-        j.source_mass != 260
-      )
-    THEN 2
-    WHEN
-      j.work_master_id IN ('Prod Blasting','Cleanup Bogging','Prod Extraction', 'Prod Remote Bogging') and j.source_material_definition_id IN ('Insitu Ore','Blasted Ore','Waste','Blasted Waste')
-      AND (
-        j.source_mass < 1
-      )
-  THEN 3
-  else 0
-END AS source_mass_red,
-CASE
-  WHEN
-      j.work_master_id IN ('Dev Blasting','Dev Bogging','Dev Extraction') and j.dest_material_definition_id IN ('Blasted Waste','Waste')
-      AND (
-        j.dest_mass != 350
-      )
-    THEN 1
-    WHEN
-      j.work_master_id IN ('Dev Blasting','Dev Bogging','Cleanup Bogging','Dev Extraction') and j.dest_material_definition_id IN ('Blasted Ore','ROM')
-      AND (
-        j.dest_mass != 260
-      )
-    THEN 2 
-	WHEN
-      j.work_master_id IN ('Prod Blasting','Cleanup Bogging','Prod Extraction', 'Prod Remote Bogging') and j.dest_material_definition_id IN ('Blasted Ore','Blasted Waste','Waste')
-      AND (
-        j.dest_mass < 1
-      )
-  THEN 3
-  ELSE 0
-END AS dest_mass_red,
-CASE
-  WHEN
-    (
-      j.work_master_id IN ('Dev Blasting','Prod Blasting')
-       AND (
-        j.source_au_gpt IS NULL)
-    ) 
-  THEN 1
-  ELSE 0
-END AS source_au_gpt_red,
-CASE
-  WHEN
-    (
-      j.work_master_id IN ('Dev Blasting')
-       AND j.contributor ilike 'dev'
-       AND j.contributor_value IS NULL
-    ) 
-  THEN 1
-  ELSE 0
-END AS source_dev_red,
-CASE
-  WHEN
-    (
-      j.work_master_id IN ('Prod Blasting')
-       AND j.contributor ilike 'sto'
-       AND j.contributor_value IS NULL
-    ) 
-  THEN 1
-  ELSE 0
-END AS source_sto_red
+    WHEN j.work_master_id IN ('Dev Blasting','Prod Blasting')
+	   AND
+	      MAX(j.dest_material_lot_id) FILTER (
+	        WHERE j.work_master_id IN ('Dev Blasting','Prod Blasting')
+	      ) OVER (PARTITION BY j.request_id) IS NOT NULL
+	   AND
+	      MAX(j.source_material_lot_id) FILTER (
+	        WHERE j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
+	      ) OVER (PARTITION BY j.request_id) IS NOT NULL
+	   AND
+	      MAX(j.dest_material_lot_id) FILTER (
+	        WHERE j.work_master_id IN ('Dev Blasting','Prod Blasting')
+	      ) OVER (PARTITION BY j.request_id)
+	      <>
+	      MAX(j.source_material_lot_id) FILTER (
+	        WHERE j.work_master_id IN ('Dev Bogging','Prod Remote Bogging','Cleanup Bogging')
+	      ) OVER (PARTITION BY j.request_id)
+	 THEN 2
+    ELSE NULL
+  END AS work_request_ML_mismatch_red
 FROM joined j
 LEFT JOIN DH_mine_sources dh
-	ON j.source_material_lot_id = dh.inventoried_material_lot_id
-	and j.order_start_time >= dh.inventoried_record_time
+  ON j.source_material_lot_id = dh.inventoried_material_lot_id
+ AND j.order_start_time >= dh.inventoried_record_time
