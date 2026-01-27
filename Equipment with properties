@@ -1,0 +1,83 @@
+WITH fleet AS (
+    SELECT distinct on (e.equipment_id)
+        e.equipment_sk,
+        e.equipment_id,
+        e.equipment_class_id,
+        e.hierarchy_scope,
+        MAX(e.record_time)::timestamp AS last_record_time
+    FROM datamart.equipment e
+    WHERE e.source_system ILIKE 'RMS'
+      --AND e.equipment_class_id IN ('Haul Truck', 'Bogger')
+      AND e.effective_from_time <= NOW()
+      AND e.effective_to_time > NOW()
+    GROUP BY 
+        e.equipment_sk,
+        e.equipment_id,
+        e.equipment_class_id,
+        e.hierarchy_scope
+),
+installedBeacon as (
+	select 
+		e.operational_location,
+		e.operational_location_type,
+		e.equipment_class_id,
+		e.equipment_id,
+		e.equipment_sk
+	from 
+		datamart.equipment e 
+	where e.operational_location_type ilike 'Equipment'
+),
+property AS (
+    SELECT *
+    FROM datamart.property p
+    WHERE p.property_type = 'EquipmentPropertyType'
+)
+SELECT
+    f.equipment_id,
+    f.equipment_class_id,
+    f.last_record_time,
+    f.equipment_sk,
+    f.hierarchy_scope,
+    ib.equipment_id as "Beacon ID",
+    sc.value   AS "Struck Capacity",
+    mp.value   AS "Maximum Payload",
+    cw.value   AS "Chassis Weight",
+    vin.value  AS "Serial Number/VIN",
+    minp.value AS "Minimum Payload",
+    decomm.value AS "Decommission Date",
+    wbr.value  AS "Working Burn Rate",
+    ibr.value  AS "Idle Burn Rate",
+    gvw.value  AS "Gross Vehicle Weight",
+    mfd.value  AS "Manufacture Date",
+    rr.value   AS "Reach Radius",
+    ftc.value  AS "Fuel Tank Capacity",
+    ff.value   AS "Form Factor",
+    mfr.value  AS "Manufacturer",
+    cdate.value AS "Commission Date",
+    bw.value   AS "Body Weight",
+    mdl.value  AS "Model",
+    hc.value   AS "Heaped Capacity",
+    ftype.value AS "Fuel Type",
+    np.value   AS "Nominal Payload"
+FROM fleet f
+LEFT JOIN property sc     ON sc.parent_entity_sk = f.equipment_sk AND sc.property_id = 'Struck Capacity'
+LEFT JOIN property mp     ON mp.parent_entity_sk = f.equipment_sk AND mp.property_id = 'Maximum Payload'
+LEFT JOIN property cw     ON cw.parent_entity_sk = f.equipment_sk AND cw.property_id = 'Chassis Weight'
+LEFT JOIN property vin    ON vin.parent_entity_sk = f.equipment_sk AND vin.property_id = 'Serial Number/VIN'
+LEFT JOIN property minp   ON minp.parent_entity_sk = f.equipment_sk AND minp.property_id = 'Minimum Payload'
+LEFT JOIN property decomm ON decomm.parent_entity_sk = f.equipment_sk AND decomm.property_id = 'Decommission Date'
+LEFT JOIN property wbr    ON wbr.parent_entity_sk = f.equipment_sk AND wbr.property_id = 'Working Burn Rate'
+LEFT JOIN property ibr    ON ibr.parent_entity_sk = f.equipment_sk AND ibr.property_id = 'Idle Burn Rate'
+LEFT JOIN property gvw    ON gvw.parent_entity_sk = f.equipment_sk AND gvw.property_id = 'Gross Vehicle Weight'
+LEFT JOIN property mfd    ON mfd.parent_entity_sk = f.equipment_sk AND mfd.property_id = 'Manufacture Date'
+LEFT JOIN property rr     ON rr.parent_entity_sk = f.equipment_sk AND rr.property_id = 'Reach Radius'
+LEFT JOIN property ftc    ON ftc.parent_entity_sk = f.equipment_sk AND ftc.property_id = 'Fuel Tank Capacity'
+LEFT JOIN property ff     ON ff.parent_entity_sk = f.equipment_sk AND ff.property_id = 'Form Factor'
+LEFT JOIN property mfr    ON mfr.parent_entity_sk = f.equipment_sk AND mfr.property_id = 'Manufacturer'
+LEFT JOIN property cdate  ON cdate.parent_entity_sk = f.equipment_sk AND cdate.property_id = 'Commission Date'
+LEFT JOIN property bw     ON bw.parent_entity_sk = f.equipment_sk AND bw.property_id = 'Body Weight'
+LEFT JOIN installedBeacon ib ON ib.operational_location= f.equipment_id 
+LEFT JOIN property mdl    ON mdl.parent_entity_sk = f.equipment_sk AND mdl.property_id = 'Model'
+LEFT JOIN property hc     ON hc.parent_entity_sk = f.equipment_sk AND hc.property_id = 'Heaped Capacity'
+LEFT JOIN property ftype  ON ftype.parent_entity_sk = f.equipment_sk AND ftype.property_id = 'Fuel Type'
+LEFT JOIN property np     ON np.parent_entity_sk = f.equipment_sk AND np.property_id = 'Nominal Payload'
