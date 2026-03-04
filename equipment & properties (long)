@@ -1,0 +1,28 @@
+WITH fleet AS ( 
+  SELECT DISTINCT ON (e.equipment_id)
+    e.equipment_sk,
+    e.equipment_id,
+    e.equipment_class_ids[1] AS equipment_class_id,
+    e.hierarchy_scope,
+    e.record_time::timestamp AS last_record_time
+  FROM dw.equipment e
+  WHERE e.source_system ILIKE 'UT'
+  ORDER BY e.equipment_id, e.record_time DESC
+),
+property AS (
+  SELECT p.entity_sk, p.id, p.value
+  FROM dw.property p
+  WHERE p.property_type = 'EquipmentPropertyType'
+)
+SELECT
+  f.equipment_id,
+  f.equipment_class_id,
+  f.last_record_time,
+  f.equipment_sk,
+  f.hierarchy_scope,
+  p.id,
+  p.value
+FROM fleet f
+LEFT JOIN property p
+  ON p.entity_sk = f.equipment_sk
+ORDER BY f.equipment_id, p.id;
