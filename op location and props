@@ -1,0 +1,64 @@
+SELECT
+      ol.datamart_sk,
+      ol.operational_location_sk,
+      ol.effective_from_time,
+      ol.effective_to_time,
+      ol.record_time,
+      ol.last_update_time,
+      ol.previous_datamart_sk,
+      ol.next_datamart_sk,
+      ol.source_system,
+      ol.ingestion_reference_sk,
+      ol.parent_operational_location_sk,
+      ol.operational_location_id,
+      ol.description AS location_description,
+      ol.hierarchy_scope,
+      ol.hierarchy_scope_path,
+      ol.operational_location_class_id,
+      d245.distance_to_245_waste,
+      cap.stockpile_capacity,
+      d260.distance_to_260_rom,
+      btrim(lower(ol.operational_location_id)) AS op_key
+  FROM datamart.operational_location AS ol
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS distance_to_245_waste
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'DistanceTo245Waste'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS d245 ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS stockpile_capacity
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'StockpileCapacity'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS cap ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT
+          CASE
+              WHEN p.value_num IS NOT NULL THEN p.value_num
+              WHEN p.value ~ '^[+-]?\d+(\.\d+)?$' THEN p.value::numeric
+              ELSE NULL
+          END AS distance_to_260_rom
+      FROM datamart.property AS p
+      WHERE p.parent_entity_sk = ol.operational_location_sk
+        AND p.property_id = 'DistanceTo260ROM'
+      ORDER BY p.value_timestamp DESC NULLS LAST, p.property_sk DESC
+      LIMIT 1
+  ) AS d260 ON TRUE
+  WHERE ol.source_system = 'RMSdh'
+    AND ol.operational_location_id ~ '[A-Za-z]'
+    AND ol.operational_location_id ~ '\s'
