@@ -1,0 +1,69 @@
+WITH fleet AS (
+    SELECT DISTINCT ON (equipment_id)
+        equipment_sk,
+        equipment_id,
+        equipment_class_id,
+        hierarchy_scope,
+        record_time AS last_record_time
+    FROM datamart.equipment
+    WHERE equipment_class_id IN ('Haul Truck')
+    AND effective_from_time <= NOW()
+    AND effective_to_time > NOW()
+    ORDER BY equipment_id, record_time DESC
+),
+property AS (
+    SELECT *
+    FROM dw.property p
+    WHERE p.property_type = 'EquipmentPropertyType'
+)
+SELECT
+    f.equipment_id,
+    f.equipment_class_id,
+    f.last_record_time,
+    f.equipment_sk,
+    f.hierarchy_scope,
+    pum.value  AS "Payload Unit Of Measure",
+    ew.value   AS "Empty Weight",
+    fc.value   AS "Fuel Capacity",
+    hus.value  AS "Hauling Unit Size",
+    ffh.value  AS "Fuel Fill Hour",
+    mk.value   AS "Make",
+    fch.value  AS "Fuel Critical Hour",
+    ffhrs.value AS "Fuel Full Hours",
+    og.value   AS "Operational Group",
+    sg.value   AS "Scheduling Group",
+    mdl.value  AS "Model"
+FROM fleet f
+LEFT JOIN property pum
+    ON pum.entity_sk = f.equipment_sk
+   AND pum.id = 'Payload Unit Of Measure'
+LEFT JOIN property ew
+    ON ew.entity_sk = f.equipment_sk
+   AND ew.id = 'Empty Weight'
+LEFT JOIN property fc
+    ON fc.entity_sk = f.equipment_sk
+   AND fc.id = 'Fuel Capacity'
+LEFT JOIN property hus
+    ON hus.entity_sk = f.equipment_sk
+   AND hus.id = 'Hauling Unit Size'
+LEFT JOIN property ffh
+    ON ffh.entity_sk = f.equipment_sk
+   AND ffh.id = 'Fuel Fill Hour'
+LEFT JOIN property mk
+    ON mk.entity_sk = f.equipment_sk
+   AND mk.id = 'Make'
+LEFT JOIN property fch
+    ON fch.entity_sk = f.equipment_sk
+   AND fch.id = 'Fuel Critical Hour'
+LEFT JOIN property ffhrs
+    ON ffhrs.entity_sk = f.equipment_sk
+   AND ffhrs.id = 'Fuel Full Hours'
+LEFT JOIN property og
+    ON og.entity_sk = f.equipment_sk
+   AND og.id = 'Operational Group'
+LEFT JOIN property sg
+    ON sg.entity_sk = f.equipment_sk
+   AND sg.id = 'Scheduling Group'
+LEFT JOIN property mdl
+    ON mdl.entity_sk = f.equipment_sk
+   AND mdl.id = 'Model'
