@@ -1,0 +1,295 @@
+WITH calendar AS (
+    SELECT  
+        period_start AS period_start,
+        period_end AS period_end,
+        date::date as date,
+        year,
+        month,
+        day,
+        shift_name,
+        "Shift_number"
+    FROM datamart.cal_shifts
+    WHERE year = EXTRACT(YEAR FROM CURRENT_DATE)
+ ),   
+ec AS (  
+  SELECT 
+    ec.equipment_capability_sk,
+    ec.start_time,
+    ec.end_time,
+    ec.entity_type,
+    ec.entity_sk,
+    ec.entity_id,
+    ec.version,
+    ec.description,                 
+    ec.hierarchy_scope,
+    ec.equipment_ids[1]        AS equipment_id,
+    ec.equipment_class_ids[1]  AS equipment_class_id,
+    ec.equipment_use,
+    ec.capability_type,
+    ec.reason,
+    ec.record_time,
+    ec.source_system,
+    ec.ingestion_reference_sk
+  FROM dw.equipment_capability ec
+),
+props AS (
+  SELECT
+    p.entity_sk,
+    p.id,
+    p.value,
+    p.unit_of_measure,
+    p.data_type,
+    p.property_sk,
+    ROW_NUMBER() OVER (
+      PARTITION BY p.entity_sk, p.id
+      ORDER BY p.property_sk DESC
+    ) AS rn
+  FROM dw.property p
+  WHERE p.id IN (
+    'EndLocationBeaconID',
+    'EngineRunHoursEnd',
+    'EngineRunHoursStart',
+    'EquipmentState',
+    'OdometerEnd',
+    'OdometerStart',
+    'OpreatorName',
+    'StartLocationBeaconID',
+    'Time Usage Category',
+    'TimeCat',
+    'TripFuelConsumed'
+  )
+),
+ec_property AS (
+  SELECT 
+    ec.equipment_capability_sk,
+    ec.start_time,
+    ec.end_time,            
+    ec.hierarchy_scope,
+    ec.equipment_id,
+    ec.equipment_class_id,
+    ec.equipment_use,
+    ec.capability_type,
+    ec.reason,
+    ec.record_time,
+    ec.source_system,
+    ec.ingestion_reference_sk,
+    elb.value  AS "EndLocationBeaconID",
+    erhe.value AS "runHours",
+    odoe.value AS "odometer",
+    opn.value  AS "OperatorName",
+    tuc.value  AS "Time Usage Category",
+    tcat.value AS "TimeCat",
+    ese.value  AS "EquipmentState",
+    tfc.value  AS "fuelConsumed"
+  FROM ec
+  LEFT JOIN props elb  ON elb.entity_sk  = ec.equipment_capability_sk AND elb.id  = 'EndLocationBeaconID'   AND elb.rn  = 1
+  LEFT JOIN props erhe ON erhe.entity_sk = ec.equipment_capability_sk AND erhe.id = 'EngineRunHoursEnd'     AND erhe.rn = 1
+  LEFT JOIN props odoe ON odoe.entity_sk = ec.equipment_capability_sk AND odoe.id = 'OdometerEnd'           AND odoe.rn = 1
+  LEFT JOIN props opn  ON opn.entity_sk  = ec.equipment_capability_sk AND opn.id  = 'OpreatorName'          AND opn.rn  = 1
+  LEFT JOIN props slb  ON slb.entity_sk  = ec.equipment_capability_sk AND slb.id  = 'EndLocationBeaconID' AND slb.rn  = 1
+  LEFT JOIN props tuc  ON tuc.entity_sk  = ec.equipment_capability_sk AND tuc.id  = 'Time Usage Category'   AND tuc.rn  = 1
+  LEFT JOIN props tcat ON tcat.entity_sk = ec.equipment_capability_sk AND tcat.id = 'TimeCat'               AND tcat.rn = 1
+  LEFT JOIN props ese  ON ese.entity_sk  = ec.equipment_capability_sk AND ese.id  = 'EquipmentState'        AND ese.rn  = 1
+  LEFT JOIN props tfc  ON tfc.entity_sk  = ec.equipment_capability_sk AND tfc.id  = 'TripFuelConsumed'      AND tfc.rn  = 1
+),
+Beacon_ID AS (
+  SELECT distinct on (equipment_id) 
+    e.operational_location,
+    e.equipment_id AS equipment_id,
+    e.effective_from_time,
+    e.effective_to_time
+  FROM datamart.equipment e
+  WHERE e.effective_from_time <= now()
+    AND (e.effective_to_time IS NULL OR e.effective_to_time > now())
+    order by equipment_id desc
+),
+op_data AS (
+  SELECT 
+    ep.equipment_id AS "equipId",
+    ep.equipment_class_id,
+    NULL::text      AS "shift",  -- replace with your shift calc if needed
+    ep.start_time   AS "startTime",
+    ep.end_time     AS "endTime",
+    ep."EquipmentState" AS "currentState",
+    ep.equipment_use AS "equipmentUse",
+    ep.reason        AS "reasonCode",
+    ep."Time Usage Category" AS "timeUsageCategory_raw",
+    ep."TimeCat",
+    NULL::numeric    AS "payload",
+    ep."EndLocationBeaconID" AS "locationId",
+    ep."runHours",
+    NULL::numeric    AS "batteryVoltage",
+    ep."odometer",
+    ep."fuelConsumed",
+    ep."OperatorName",
+    NULL::numeric    AS "fuelBurn",
+    NULL::numeric    AS "eng_hours",  -- or ep."runHours"::numeric if appropriate
+    -- Duration in seconds; treats NULL end_time as zero-length
+    GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(ep.end_time, ep.start_time) - ep.start_time)))::bigint AS "Duration",
+    NULL::numeric    AS "distance_travelled",
+    NULL::numeric    AS "distanceTravelleddState",
+    pe.operational_location,
+    CASE ep.reason
+      WHEN 'Hauling' THEN 'Productive Time'
+      WHEN 'Dumping' THEN 'Productive Time'
+      WHEN 'SpotAtDump' THEN 'Productive Time'
+      WHEN 'SpotAtLoader' THEN 'Productive Time'
+      WHEN 'Loading' THEN 'Productive Time'
+      WHEN 'TravelToLoader' THEN 'Non Productive Time'
+      WHEN 'QueueAtLoader' THEN 'Non Productive Time'
+      WHEN 'QueueAtDump' THEN 'Non Productive Time'
+      WHEN 'TravelToFuelStation' THEN 'Operating Delay'
+      WHEN 'QueueAtFuelBay' THEN 'Operating Delay'
+      WHEN 'Refueling' THEN 'Operating Delay'
+      WHEN 'BlockedDecline' THEN 'Operating Delay'
+      WHEN 'AwaitingReEntry' THEN 'Operating Delay'
+      WHEN 'AwaitingLoader' THEN 'Operating Delay'
+      WHEN 'TravelToTowPoint' THEN 'Operating Delay'
+      WHEN 'AwaitTowingEquipment' THEN 'Operating Delay'
+      WHEN 'PartLoadTowTruck' THEN 'Operating Delay'
+      WHEN 'FitTowingHardware' THEN 'Operating Delay'
+      WHEN 'Towing' THEN 'Operating Delay'
+      WHEN 'TravelToCrib' THEN 'Standby'
+      WHEN 'AwaitingOperatorOnCrib' THEN 'Standby'
+      WHEN 'TravelToHandoverLocation' THEN 'Standby'
+      WHEN 'EndOfShiftInspection' THEN 'Standby'
+      WHEN 'PreStartInspection' THEN 'Standby'
+      WHEN 'TravelToWashbay' THEN 'Standby'
+      WHEN 'EquipmentWashdown' THEN 'Standby'
+      WHEN 'ParkedAtGoLine' THEN 'Standby'
+      WHEN 'Stopped' THEN 'Standby'
+      WHEN 'Incident' THEN 'Standby'
+      WHEN 'CribTimeAllowanceExceeded' THEN 'Standby'
+      WHEN 'NoOperator:PersonalBreak' THEN 'Standby'
+      WHEN 'TravelToMaintenance' THEN 'Scheduled DownTime'
+      WHEN 'TravelToParkup' THEN 'Scheduled DownTime'
+      WHEN 'ParkedAtNoGoLine' THEN 'Scheduled DownTime'
+      WHEN 'BreakDown:DamageRepairs' THEN 'UnScheduled DownTime'
+      WHEN 'BreakDown:EngineSystem' THEN 'BreakDown'
+      WHEN 'BreakDown:HydraulicSystem' THEN 'BreakDown'
+      WHEN 'BreakDown:Cab/ChassisSystem' THEN 'BreakDown'
+      WHEN 'BreakDown:DriveTrain' THEN 'BreakDown'
+      WHEN 'BreakDown:Tyres/Rims' THEN 'BreakDown'
+      WHEN 'BreakDown:ElectricalSystem' THEN 'BreakDown'
+      ELSE 'Unknown'
+      END AS GSM_TUM
+  FROM ec_property ep
+  LEFT JOIN Beacon_ID pe
+    ON ep."EndLocationBeaconID" = pe.equipment_id
+),
+final AS (
+  SELECT 
+    "equipId",
+    equipment_class_id,
+    "shift",
+    "startTime",
+    "endTime",
+    "currentState",
+    "equipmentUse",
+    "reasonCode",
+    "timeUsageCategory_raw",
+    -- everything to the right of the last |
+    regexp_replace("timeUsageCategory_raw", '.*\|', '') AS "timeUsageCategory",
+    "locationId",
+    "runHours",
+    "batteryVoltage",
+    "odometer",
+    "fuelConsumed",
+    "fuelBurn",
+    "eng_hours",
+    "Duration",
+    "distance_travelled",
+    "distanceTravelleddState",
+    operational_location,
+    GSM_TUM,
+    CASE 
+      WHEN regexp_replace("timeUsageCategory_raw", '.*\|', '') ILIKE '%unscheduled%down%' 
+        THEN 'DownTime'
+      ELSE NULL
+    END AS GSM_TUM_DownTime_agg,
+    CASE 
+      WHEN regexp_replace("timeUsageCategory_raw", '.*\|', '') ILIKE '%unscheduled%down%' 
+        THEN 1 
+      ELSE 0 
+    END AS BreakDown_eventCount
+  FROM op_data
+),
+-- NEW: slice each event across the calendar windows
+apportioned AS (
+  SELECT
+    c.*,
+    f."equipId",
+    f.equipment_class_id as equipment_class,
+    f."shift",
+    f."currentState",
+    f."equipmentUse",
+    f."reasonCode",
+    f."timeUsageCategory_raw",
+    f."timeUsageCategory",
+    f."locationId",
+    f."runHours",
+    f."batteryVoltage",
+    f."odometer",
+    f."fuelConsumed",
+    f."fuelBurn",
+    f."eng_hours",
+    --f."Duration" AS raw_event_duration_sec,
+    f."distance_travelled",
+    f."distanceTravelleddState",
+    f.operational_location,
+    --f.GSM_TUM,
+    f.GSM_TUM_DownTime_agg,
+    f.BreakDown_eventCount,
+    GREATEST(
+      0,
+      EXTRACT(
+        EPOCH FROM (
+          LEAST(
+            COALESCE(f."endTime", f."startTime"),
+            c.period_end
+          )
+          - GREATEST(f."startTime", c.period_start)
+        )
+      )
+    )::bigint AS apportioned_duration_sec
+  FROM calendar c
+  LEFT JOIN final f
+    -- join on interval overlap instead of startTime in range
+    ON f."startTime" < c.period_end
+   AND COALESCE(f."endTime", f."startTime") > c.period_start
+)
+  SELECT
+    *,
+    SUM(apportioned_duration_sec) OVER (
+      PARTITION BY "equipId", date
+      ORDER BY period_start
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) / 3600.0 AS cumulative_total_hours,
+    SUM(
+      CASE
+        WHEN GSM_TUM_DownTime_agg = 'DownTime'
+        THEN apportioned_duration_sec
+        ELSE 0
+      END
+    ) OVER (
+      PARTITION BY "equipId", date
+      ORDER BY period_start
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) / 3600.0 AS cumulative_downtime_hours,
+    SUM(
+      CASE
+        WHEN BreakDown_eventCount = 1
+        THEN apportioned_duration_sec
+        ELSE 0
+      END
+    ) OVER (
+      PARTITION BY "equipId", date
+      ORDER BY period_start
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) / 3600.0 AS cumulative_breakdown_hours,
+    SUM(BreakDown_eventCount) OVER (
+      PARTITION BY "equipId", date
+      ORDER BY period_start
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_BreakDown_eventCount
+  FROM apportioned
