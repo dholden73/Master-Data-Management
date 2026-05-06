@@ -1,0 +1,150 @@
+WITH current_record AS (
+    SELECT DISTINCT ON (material_lot_ids[1])
+        material_lot_ids[1]        AS material_lot_id,
+        material_actual_sk,
+        material_definition_ids[1] AS material_definition_id,
+        spatial_definition_sk
+    FROM dw.material_actual
+    WHERE source_system = 'GCMSdh'
+      AND material_use  = 'Inventoried'
+      AND COALESCE(is_deleted, false) = false
+    ORDER BY
+        material_lot_ids[1],
+        (material_definition_ids[1] IS NULL OR operational_location IS NULL),
+        record_time DESC,
+        material_actual_sk desc
+),
+current_records_sk as (
+     SELECT 
+        cr.material_lot_id,
+        cr.material_actual_sk,
+        cr.material_definition_id,
+        cr.spatial_definition_sk,
+        sd.value
+	FROM current_record cr
+	LEFT JOIN dw.spatial_definition sd
+       ON sd.spatial_definition_sk = cr.spatial_definition_sk
+),
+qty_pivot AS (
+    SELECT
+        ma.material_actual_sk,
+        MAX(qa.value_num) FILTER (WHERE qa.key = 'mass')   AS mass_t,
+        MAX(qa.value_num) FILTER (WHERE qa.key = 'volume') AS volume_bcm
+    FROM dw.material_actual ma
+    JOIN datamart.quantity qa ON qa.ingestion_reference_sk = ma.ingestion_reference_sk
+    WHERE ma.material_actual_sk IN (SELECT material_actual_sk FROM current_records_sk)
+    GROUP BY ma.material_actual_sk
+),
+props_pivot AS (
+    SELECT
+        p.entity_sk,
+        MAX(p.value) FILTER (WHERE p.id = 'Lot Type')       AS lot_type,
+        MAX(p.value) FILTER (WHERE p.id = 'mining status')  AS mining_status,
+        MAX(p.value) FILTER (WHERE p.id = 'Colour')         AS colour,
+        MAX(p.value) FILTER (WHERE p.id = 'Dry Density')    AS dry_density,
+        MAX(p.value) FILTER (WHERE p.id = 'Wet Density')    AS wet_density,
+        MAX(p.value) FILTER (WHERE p.id = 'Depletion Mode') AS depletion_mode,
+        MAX(p.value) FILTER (WHERE p.id = 'Open Date')      AS open_date,
+        MAX(p.value) FILTER (WHERE p.id = 'Au')             AS au_gpt,
+        MAX(p.value) FILTER (WHERE p.id = 'MatDef')         AS matdef_shortcode,
+        MAX(p.value) FILTER (WHERE p.id = 'MROCK')          AS mrock,
+        MAX(p.value) FILTER (WHERE p.id = 'GROCK')          AS grock,
+        MAX(p.value) FILTER (WHERE p.id = 'Blasted')        AS blasted,
+        MAX(p.value) FILTER (WHERE p.id = 'Free Dig')       AS free_dig,
+        MAX(p.value) FILTER (WHERE p.id = 'Flitch')         AS flitch,
+        MAX(p.value) FILTER (WHERE p.id = 'Stage')          AS stage,
+        MAX(p.value) FILTER (WHERE p.id = 'Bench')          AS bench,
+        MAX(p.value) FILTER (WHERE p.id = 'Shot')           AS shot,
+        MAX(p.value) FILTER (WHERE p.id = 'Block Number')   AS block_number,
+        -- GCD pre-blast values
+        MAX(p.value) FILTER (WHERE p.id = 'Volume GCD')     AS volume_gcd,
+        MAX(p.value) FILTER (WHERE p.id = 'Tonnes GCD')     AS tonnes_gcd,
+        MAX(p.value) FILTER (WHERE p.id = 'Dry GCD')        AS dry_gcd,
+        MAX(p.value) FILTER (WHERE p.id = 'Wet GCD')        AS wet_gcd,
+        MAX(p.value) FILTER (WHERE p.id = 'Au GCD')         AS au_gcd
+    FROM dw.property p
+    WHERE p.property_type = 'OpMaterialActualPropertyType.ValueType'
+      AND p.id IN (
+          'Lot Type','mining status','Colour','Dry Density','Wet Density',
+          'Depletion Mode','Open Date','Au',
+          'MatDef','MROCK','Blasted','Free Dig','Flitch',
+          'Stage','Bench','Shot','Block Number',
+          'Volume GCD','Tonnes GCD','Dry GCD','Wet GCD','Au GCD'
+      )
+      AND p.entity_sk IN (SELECT material_actual_sk FROM current_records_sk)
+    GROUP BY p.entity_sk
+)
+-- Post-blast row (uses qty_pivot + Dry/Wet Density + Au)
+SELECT
+    'post blast'                       AS data_source,
+    x.material_lot_ids[1]              AS material_lot_id,
+    sk.material_definition_id,
+    sk.value,
+    x.material_actual_sk,
+    x.operational_location             AS operational_location,
+    x.description[1] as description,
+    x.record_time                      AS record_time,
+    qp.mass_t                          AS tonnes_t,
+    qp.volume_bcm                      AS volume_bcm,
+    pp.dry_density::numeric            AS dry_density,
+    pp.wet_density::numeric            AS wet_density,
+    pp.au_gpt::numeric                 AS au_gpt,
+    pp.lot_type                        AS lot_type,
+    pp.mining_status                   AS mining_status,
+    pp.colour                          AS inventoried_colour,
+    pp.depletion_mode                  AS depletion_mode,
+    pp.open_date::timestamp            AS open_date,
+    pp.matdef_shortcode                AS matdef_shortcode,
+    pp.mrock::numeric                  AS mrock,
+    pp.grock::numeric  				   AS grock,
+    pp.blasted                         AS blasted,
+    pp.free_dig                        AS free_dig,
+    pp.flitch                          AS flitch,
+    pp.stage                           AS stage,
+    pp.bench                           AS bench,
+    pp.shot                            AS ishot,
+    pp.block_number                    AS block_number
+FROM current_records_sk sk
+JOIN dw.material_actual x
+    ON x.material_actual_sk = sk.material_actual_sk
+LEFT JOIN qty_pivot qp
+    ON qp.material_actual_sk = x.material_actual_sk
+LEFT JOIN props_pivot pp
+    ON pp.entity_sk          = x.material_actual_sk
+UNION ALL
+-- GCD pre-blast row (uses *_GCD properties)
+SELECT
+    'grade control design'             AS data_source,
+    x.material_lot_ids[1]              AS material_lot_id,
+    sk.material_definition_id,
+    sk.value,
+    x.material_actual_sk,
+    x.operational_location             AS operational_location,
+    x.description[1] as description,
+    x.record_time                      AS record_time,
+    pp.tonnes_gcd::numeric             AS tonnes_t,
+    pp.volume_gcd::numeric             AS volume_bcm,
+    pp.dry_gcd::numeric                AS dry_density,
+    pp.wet_gcd::numeric                AS wet_density,
+    pp.au_gcd::numeric                 AS au_gpt,
+    pp.lot_type                        AS lot_type,
+    pp.mining_status                   AS mining_status,
+    pp.colour                          AS inventoried_colour,
+    pp.depletion_mode                  AS depletion_mode,
+    pp.open_date::timestamp            AS open_date,
+    pp.matdef_shortcode                AS matdef_shortcode,
+    pp.mrock::numeric                  AS mrock,
+    pp.grock::numeric  				   AS grock,
+    pp.blasted                         AS blasted,
+    pp.free_dig                        AS free_dig,
+    pp.flitch                          AS flitch,
+    pp.stage                           AS stage,
+    pp.bench                           AS bench,
+    pp.shot                            AS ishot,
+    pp.block_number                    AS block_number
+FROM current_records_sk sk
+JOIN dw.material_actual x
+    ON x.material_actual_sk = sk.material_actual_sk
+LEFT JOIN props_pivot pp
+    ON pp.entity_sk          = x.material_actual_sk
+ORDER BY material_lot_id, data_source
