@@ -1,29 +1,16 @@
-WITH current_record AS (
-    SELECT DISTINCT ON (material_lot_ids[1])
-        material_lot_ids[1]        AS material_lot_id,
-        material_actual_sk,
-        material_definition_ids[1] AS material_definition_id,
-        spatial_definition_sk
-    FROM dw.material_actual
-    WHERE source_system = 'GCMSdh'
-      AND material_use  = 'Inventoried'
-      AND COALESCE(is_deleted, false) = false
+WITH current_records_sk AS (
+    SELECT DISTINCT ON (ma.material_lot_ids[1])
+        ma.material_lot_ids[1] AS material_lot_id,
+        ma.material_actual_sk, ma.material_definition_ids[1] as material_definition_id
+    FROM dw.material_actual ma
+    WHERE ma.source_system = 'GCMSdh'
+      AND ma.material_use  = 'Inventoried'
+      AND COALESCE(ma.is_deleted, false) = false
     ORDER BY
-        material_lot_ids[1],
-        (material_definition_ids[1] IS NULL OR operational_location IS NULL),
-        record_time DESC,
-        material_actual_sk desc
-),
-current_records_sk as (
-     SELECT 
-        cr.material_lot_id,
-        cr.material_actual_sk,
-        cr.material_definition_id,
-        cr.spatial_definition_sk,
-        sd.value
-	FROM current_record cr
-	LEFT JOIN dw.spatial_definition sd
-       ON sd.spatial_definition_sk = cr.spatial_definition_sk
+        ma.material_lot_ids[1],
+        (ma.material_definition_ids[1] IS NULL OR ma.operational_location IS NULL),
+        ma.record_time DESC,
+        ma.material_actual_sk DESC
 ),
 qty_pivot AS (
     SELECT
@@ -79,7 +66,6 @@ SELECT
     'post blast'                       AS data_source,
     x.material_lot_ids[1]              AS material_lot_id,
     sk.material_definition_id,
-    sk.value,
     x.material_actual_sk,
     x.operational_location             AS operational_location,
     x.description[1] as description,
@@ -117,7 +103,6 @@ SELECT
     'grade control design'             AS data_source,
     x.material_lot_ids[1]              AS material_lot_id,
     sk.material_definition_id,
-    sk.value,
     x.material_actual_sk,
     x.operational_location             AS operational_location,
     x.description[1] as description,
