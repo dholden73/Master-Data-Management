@@ -1,0 +1,37 @@
+WITH current_ol AS (
+    SELECT distinct on (operational_location_id) ol.*
+    FROM datamart.operational_location ol
+    ORDER by operational_location_id, record_time DESC
+),
+latest_props AS (
+    SELECT 
+        p.entity_sk,
+        p.id,
+        p.value,
+        p.key,
+        p.unit_of_measure
+    FROM dw.property p
+    WHERE p.id IN ('PolygonZ','StockpileCapacity','StockpileCapacityOre','StockpileCapacityWaste','MovementTypeFlag')
+      AND p.entity_sk IN (SELECT operational_location_sk FROM current_ol)
+),
+props_pivoted AS (
+    SELECT
+        entity_sk,
+        MAX(value) FILTER (WHERE id = 'PolygonZ')               AS polygon_z,
+        MAX(value) FILTER (WHERE id = 'StockpileCapacity')      AS stockpile_capacity,
+        MAX(value) FILTER (WHERE id = 'StockpileCapacityOre')   AS stockpile_capacity_ore,
+        MAX(value) FILTER (WHERE id = 'StockpileCapacityWaste') AS stockpile_capacity_waste,
+        MAX(value) FILTER (WHERE id = 'MovementTypeFlag') AS MovementTypeFlag
+    FROM latest_props
+    GROUP BY entity_sk
+)
+SELECT
+    ol.*,
+    pp.polygon_z,
+    pp.stockpile_capacity,
+    pp.stockpile_capacity_ore,
+    pp.stockpile_capacity_waste,
+    pp.MovementTypeFlag
+FROM current_ol ol
+LEFT JOIN props_pivoted pp
+       ON pp.entity_sk = ol.operational_location_sk
